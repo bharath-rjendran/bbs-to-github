@@ -121,7 +121,9 @@ jobs:
           GH_TOKEN:     ${{ secrets.GH_PAT }}
           BBS_USERNAME: ${{ secrets.BBS_USERNAME }}
           BBS_PASSWORD: ${{ secrets.BBS_PASSWORD }}
-          BBS_BASE_URL: ${{ inputs.bbs_base_url }}
+          BBS_BASE_URL: ${{ inputs.bbs_base_url }}       
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY_PATH: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           # Execute migration script with parameters
           .\scripts\1_migration.ps1 `
