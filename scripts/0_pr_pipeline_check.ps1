@@ -1,8 +1,10 @@
 # Bitbucket Server/DC "pipeline" readiness check
-# - Reads repos.csv with extended header (incl. github_org, github_repo, gh_repo_visibility)
-# - Flags [BLOCKER] for OPEN PRs, INPROGRESS builds, archived repo, missing default branch/commit
-# - Writes output CSV: bbs_pipeline_validation_output-<timestamp>.csv
-# - Emits console markers parsed by the workflow
+# Flags [BLOCKER] for:
+# - OPEN PRs
+# - INPROGRESS builds on latest default-branch commit
+# - Archived repo
+# - Missing default branch / latest commit
+# Outputs: bbs_pipeline_validation_output-<timestamp>.csv
 
 param(
     [Parameter(Mandatory=$false)]
@@ -61,10 +63,7 @@ function Get-AuthHeaders {
 $headers = Get-AuthHeaders
 
 # ---- REST helpers ----
-function Invoke-BbsGet {
-    param([string]$Url)
-    return Invoke-RestMethod -Method Get -Uri $Url -Headers $headers
-}
+function Invoke-BbsGet { param([string]$Url) ; Invoke-RestMethod -Method Get -Uri $Url -Headers $headers }
 function Invoke-BbsGetPaged {
     param([string]$Url)
     $all = @()
@@ -128,20 +127,13 @@ foreach ($row in $rows) {
     $projKey   = $row.'project-key'
     $repoSlug  = $row.'repo'
     $archived  = [string]$row.'is-archived'
-    $archivedB = $false
-    if ($archived) {
-        # Accept True/False in various cases
-        $archivedB = ($archived.Trim().ToLower() -eq 'true')
-    }
+    $archivedB = ($archived -and $archived.Trim().ToLower() -eq 'true')
 
     # Default branch + latest commit
     $defaultBranch = Get-DefaultBranch -ProjectKey $projKey -RepoSlug $repoSlug
     $defaultBranchDisplayId = $defaultBranch?.displayId
-    if (-not $defaultBranchDisplayId -and $defaultBranch?.id) {
-        # refs/heads/master -> master
-        if ($defaultBranch.id -like 'refs/heads/*') {
-            $defaultBranchDisplayId = $defaultBranch.id.Substring(11)
-        }
+    if (-not $defaultBranchDisplayId -and $defaultBranch?.id -like 'refs/heads/*') {
+        $defaultBranchDisplayId = $defaultBranch.id.Substring(11)
     }
     $latestCommitId = $null
     if ($defaultBranchDisplayId) {
@@ -149,8 +141,7 @@ foreach ($row in $rows) {
     }
 
     # Build statuses on latest commit
-    $statuses = @()
-    if ($latestCommitId) { $statuses = Get-BuildStatuses -ProjectKey $projKey -RepoSlug $repoSlug -CommitId $latestCommitId }
+    $statuses = if ($latestCommitId) { Get-BuildStatuses -ProjectKey $projKey -RepoSlug $repoSlug -CommitId $latestCommitId } else { @() }
 
     $stateCounts = @{ INPROGRESS=0; SUCCESSFUL=0; FAILED=0; CANCELLED=0; UNKNOWN=0 }
     foreach ($s in $statuses) {
@@ -178,8 +169,8 @@ foreach ($row in $rows) {
           $projKey, $repoSlug, $openPrs, $stateCounts.INPROGRESS, $stateCounts.FAILED, $stateCounts.SUCCESSFUL) -ForegroundColor Green
     }
 
-    # Write result row (preserve GitHub mapping columns)
-    $obj = [PSCustomObject]@{
+    # Output row (preserve GitHub mapping columns)
+    $results.Add([PSCustomObject]@{
         project_key            = $projKey
         project_name           = $row.'project-name'
         repo_slug              = $repoSlug
@@ -196,8 +187,7 @@ foreach ($row in $rows) {
         open_pr_count          = $openPrs
         is_archived            = $archivedB
         blockers               = ($blockers -join ';')
-    }
-    $results.Add($obj)
+    })
 }
 
 # ---- Output CSV ----
@@ -212,3 +202,4 @@ $openPrsTotal       = ($results | Measure-Object -Property open_pr_count -Sum).S
 Write-Host "`n[SUMMARY] Total repos: $($rows.Count)" -ForegroundColor Green
 Write-Host ("Repos with RUNNING builds: {0}" -f $runningBuildsRepos) -ForegroundColor Green
 Write-Host ("Repos with OPEN PRs:       {0} (total open PRs: {1})" -f $reposWithOpenPRs, $openPrsTotal) -ForegroundColor Green
+Write-Host ("Repos with BLOCKERS:       {0}" -f $blockerRepos) -ForegroundColor Green
