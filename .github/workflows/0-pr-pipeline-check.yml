@@ -16,7 +16,7 @@ on:
           - 'true'
           - 'false'
       bbs_base_url:
-        description: 'Bitbucket Server/DC base URL'
+        description: 'Bitbucket Server/DC base URLz'
         required: true
         type: string
 
