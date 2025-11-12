@@ -43,7 +43,7 @@ jobs:
           # Fallback: Basic auth
           BBS_USERNAME: ${{ secrets.BBS_USERNAME }}
           BBS_PASSWORD: ${{ secrets.BBS_PASSWORD }}
-          BBS_BASE_URL: ${{ github.event.inputs.bbs_base_url }}
+          BBS_BASE_URL: ${{ inputs.bbs_base_url }}
         run: |
           Write-Host "==================================================" -ForegroundColor Cyan
           Write-Host " Bitbucket Server/DC Pipeline Readiness Check     " -ForegroundColor Cyan
@@ -53,7 +53,7 @@ jobs:
           $ErrorActionPreference = 'Continue'
 
           # Run the PS script from repo
-          $output = & .\scripts\0_pr_pipeline_check.ps1 -CsvPath "${{ github.event.inputs.csv_path }}" 2>&1
+          $output = & .\scripts\0_pr_pipeline_check.ps1 -CsvPath "${{ inputs.csv_path }}" 2>&1
           $output | ForEach-Object { Write-Host $_ }
 
           # Detect blockers using console markers from the script
@@ -99,9 +99,9 @@ jobs:
         run: |
           $passed = $env:READINESS_CHECK_PASSED
           $hasBlockers = $env:HAS_BLOCKERS
-          $triggerMigration = "${{ github.event.inputs.trigger_migration }}"
-          $csvPath = "${{ github.event.inputs.csv_path }}"
-          $bbsUrl = "${{ github.event.inputs.bbs_base_url }}"
+          $triggerMigration = "${{ inputs.trigger_migration }}"
+          $csvPath = "${{ inputs.csv_path }}"
+          $bbsUrl = "${{ inputs.bbs_base_url }}"
 
           # Write summary line-by-line (no here-strings, no backticks)
           Add-Content $env:GITHUB_STEP_SUMMARY '# 🔎 Bitbucket Pipeline Readiness Check Results'
@@ -173,15 +173,9 @@ jobs:
               repo: context.repo.repo,
               workflow_id: '1-migration.yml',
               ref: 'main',
-                inputs: {
-                csv_path: '${{ github.event.inputs.csv_path }}',
+              inputs: {
+                csv_path: '${{ inputs.csv_path }}',
                 max_concurrent: '3'
               }
             });
             console.log('🚀 Migration workflow triggered successfully!');
-  finalize:
-    needs: readiness-check
-    if: ${{ !github.event.inputs.trigger_migration && needs['readiness-check'].outputs['check-passed'] == 'true' && needs['readiness-check'].outputs['has-blockers'] == 'false' }}
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "✅ Readiness check completed and migration disabled. Workflow marked successful."  
