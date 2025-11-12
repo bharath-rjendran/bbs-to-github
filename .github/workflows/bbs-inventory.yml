@@ -4,17 +4,22 @@ on:
   workflow_dispatch:
     inputs:
       bbs_base_url:
-        description: 'Bitbucket Server/Data Center base URL'
+        description: 'Bitbucket Server/Data Center base URL (e.g., https://bitbucket.example.com)'
         required: true
         type: string
-      project_key:
-        description: 'Optional: Scope to a single project key (e.g., WORK). Leave blank to inventory all projects.'
+      bbs_project:
+        description: 'Optional: scope to a single BBS project key (e.g., WORK). Leave blank for all projects.'
         required: false
         type: string
+      minimal:
+        description: 'Use --minimal to speed up inventory (fewer columns)'
+        required: false
+        default: false
+        type: boolean
       artifact_name:
         description: 'Artifact base name'
         required: false
-        default: 'repos.csv'
+        default: 'bbs-repos.csv'
         type: string
 
 permissions:
@@ -28,127 +33,81 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      # No checkout (we don't read any files from the repository)
+      # No checkout: we do not reference any files from the repository
 
-      - name: Validate inputs
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not "${{ inputs.bbs_base_url }}") { throw "bbs_base_url is required." }
-
-      - name: Generate repos.csv from Bitbucket Server REST API
-        id: build_csv
+      - name: Verify GitHub CLI
         shell: pwsh
         env:
-          BBS_BASE_URL: ${{ inputs.bbs_base_url }}
-          BBS_TOKEN:    ${{ secrets.BBS_PAT }}       # Preferred: HTTP access token (Bearer)
-          BBS_USER:     ${{ secrets.BBS_USERNAME }}  # Optional: Basic auth username
-          BBS_PASS:     ${{ secrets.BBS_PASSWORD }}  # Optional: Basic auth password
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "GitHub CLI version:" -ForegroundColor Cyan
+          gh --version
+          gh auth status
+
+      - name: Install gh-bbs2gh extension
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "Installing gh-bbs2gh..." -ForegroundColor Cyan
+          gh extension install github/gh-bbs2gh
+          Write-Host "`nInstalled extension version:" -ForegroundColor Cyan
+          gh bbs2gh --version
+
+      - name: Run gh bbs2gh inventory-report
+        id: run_inventory
+        shell: pwsh
+        env:
+          GH_TOKEN:     ${{ secrets.GH_PAT }}        # GitHub PAT (needed by CLI extension)
+          BBS_USERNAME: ${{ secrets.BBS_USERNAME }}  # Bitbucket Server admin/super-admin user
+          BBS_PASSWORD: ${{ secrets.BBS_PASSWORD }}  # Bitbucket Server password
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $baseUrl = $env:BBS_BASE_URL.TrimEnd('/')
-          $projKey = "${{ inputs.project_key }}"
+          $bbsUrl   = "${{ inputs.bbs_base_url }}"
+          $project  = "${{ inputs.bbs_project }}"
+          $minimal  = "${{ inputs.minimal }}"
 
-          # ---------- Auth headers ----------
-          $headers = @{}
-          if ($env:BBS_TOKEN) {
-            # Use Bearer token (HTTP access token)
-            $headers["Authorization"] = "Bearer $($env:BBS_TOKEN)"
-          } elseif ($env:BBS_USER -and $env:BBS_PASS) {
-            # Fallback: Basic auth
-            $pair = "$($env:BBS_USER):$($env:BBS_PASS)"
-            $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
-            $headers["Authorization"] = "Basic $basic"
-          } else {
-            throw "No Bitbucket credentials provided. Set BBS_PAT or BBS_USERNAME + BBS_PASSWORD."
+          # Compose command
+          $cmd = "gh bbs2gh inventory-report --bbs-server-url `"$bbsUrl`""
+          if ($project -and $project.Trim().Length -gt 0) { $cmd += " --bbs-project `"$project`"" }
+          if ($minimal -eq "true") { $cmd += " --minimal" }
+
+          # bbs2gh authenticates to BBS using username/password (per GitHub docs)
+          # It reads them from env vars BBS_USERNAME/BBS_PASSWORD
+          Write-Host "[INFO] Executing:" -ForegroundColor Cyan
+          Write-Host $cmd
+          iex $cmd
+
+          # Find the newest repos.csv anywhere under the workspace
+          $repoCsv = Get-ChildItem -Path . -Recurse -Filter "repos.csv" |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+          if (-not $repoCsv) {
+            Write-Error "[ERROR] Could not find repos.csv after inventory-report. Ensure command completed successfully."
           }
 
-          # ---------- Helpers (paged GET) ----------
-          function Invoke-BbsGetPaged {
-            param(
-              [string]$Url
-            )
-            $all = @()
-            $start = 0
-            do {
-              $pagedUrl = if ($Url.Contains('?')) { "$Url&start=$start" } else { "$Url?start=$start" }
-              $resp = Invoke-RestMethod -Method Get -Uri $pagedUrl -Headers $headers
-              if ($resp.values) { $all += $resp.values }
-              $isLast = $resp.isLastPage
-              $start  = $resp.nextPageStart
-            } while (-not $isLast)
-            return $all
+          Write-Host "[INFO] Found repos.csv at: $($repoCsv.FullName)" -ForegroundColor Green
+
+          # Output the absolute path for upload step (no copy)
+          "repo_csv_path=$((Resolve-Path $repoCsv.FullName).Path)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          # Optional preview
+          try {
+            Write-Host "`n=== repos.csv preview (Top 5 rows) ===" -ForegroundColor Cyan
+            Import-Csv $repoCsv.FullName | Select-Object -First 5 | Format-Table -AutoSize
+          } catch {
+            Write-Host "[WARN] Preview failed (non-CSV or large file). Proceeding with upload." -ForegroundColor Yellow
           }
-
-          # ---------- Fetch projects ----------
-          $projects = @()
-          if ([string]::IsNullOrWhiteSpace($projKey)) {
-            $projects = Invoke-BbsGetPaged -Url "$baseUrl/rest/api/1.0/projects"
-          } else {
-            # Single project
-            $p = Invoke-RestMethod -Method Get -Uri "$baseUrl/rest/api/1.0/projects/$projKey" -Headers $headers
-            if ($p) { $projects = @($p) } else { throw "Project $projKey not found." }
-          }
-
-          if (-not $projects -or $projects.Count -eq 0) {
-            throw "No projects found (check permissions or URL)."
-          }
-
-          # ---------- Build repo rows ----------
-          $rows = New-Object System.Collections.Generic.List[object]
-
-          foreach ($proj in $projects) {
-            $key = $proj.key
-            $pname = $proj.name
-
-            $repos = Invoke-BbsGetPaged -Url "$baseUrl/rest/api/1.0/projects/$key/repos"
-            foreach ($r in $repos) {
-              # Repo URL (clone HTTPS if present; else self link)
-              $httpsClone = $null
-              if ($r.links -and $r.links.clone) {
-                $httpsClone = ($r.links.clone | Where-Object { $_.name -eq 'http' -or $_.href -like 'http*' } | Select-Object -First 1).href
-              }
-              $selfLink = ($r.links.self | Select-Object -First 1).href
-              $repoUrl  = $httpsClone ?? $selfLink ?? "$baseUrl/projects/$key/repos/$($r.slug)/browse"
-
-              # Default branch may be in $r.defaultBranch if enabled
-              $defaultBranch = $r.defaultBranch?.displayId
-
-              # Compose record (aligning to a familiar schema)
-              $obj = [PSCustomObject]@{
-                project_key     = $key
-                project_name    = $pname
-                repo_slug       = $r.slug
-                repo_name       = $r.name
-                url             = $repoUrl
-                default_branch  = $defaultBranch
-                is_private      = $true  # BBS repos are private by nature; toggle if you have custom visibility
-                last_updated_ms = $r.updatedOn   # may be null on some versions
-              }
-              $rows.Add($obj)
-            }
-          }
-
-          if ($rows.Count -eq 0) {
-            throw "No repositories found across the selected scope."
-          }
-
-          # ---------- Write CSV ----------
-          $csvPath = Join-Path (Get-Location) "repos.csv"
-          $rows | Export-Csv -Path $csvPath -NoTypeInformation
-          Write-Host "[INFO] Wrote CSV: $csvPath"
-          "repo_csv_path=$csvPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-
-          # Preview
-          Write-Host "`n=== repos.csv (Top 5) ==="
-          Import-Csv $csvPath | Select-Object -First 5 | Format-Table -AutoSize
 
       - name: Upload repos.csv artifact (only)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.artifact_name }}-${{ github.run_number }}
-          path: ${{ steps.build_csv.outputs.repo_csv_path }}
+          path: ${{ steps.run_inventory.outputs.repo_csv_path }}
           retention-days: 30
           if-no-files-found: error
 
@@ -156,10 +115,14 @@ jobs:
         if: always()
         shell: pwsh
         run: |
+          $bbsUrl   = "${{ inputs.bbs_base_url }}"
+          $project  = "${{ inputs.bbs_project }}"
+          $minimal  = "${{ inputs.minimal }}"
+          $baseName = "${{ inputs.artifact_name }}-${{ github.run_number }}"
+
           Write-Host "## BBS Inventory Complete" >> $env:GITHUB_STEP_SUMMARY
           Write-Host "" >> $env:GITHUB_STEP_SUMMARY
-          Write-Host "**Base URL:** ${{ inputs.bbs_base_url }}" >> $env:GITHUB_STEP_SUMMARY
-          Write-Host "**Project scope:** ${{ inputs.project_key }}" >> $env:GITHUB_STEP_SUMMARY
-          Write-Host "**Artifact:** `${{ inputs.artifact_name }}-${{ github.run_number }}` (contains only \`repos.csv\`)" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "**Command:** gh bbs2gh inventory-report --bbs-server-url $bbsUrl $($project -and ('--bbs-project ' + $project) -or '') $($minimal -eq 'true' ? '--minimal' : '')" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "**Artifact:** \`$baseName\` (contains only \`repos.csv\`)" >> $env:GITHUB_STEP_SUMMARY
           Write-Host "" >> $env:GITHUB_STEP_SUMMARY
-          Write-Host "📥 Download **repos.csv** from Artifacts, edit or enrich as needed (e.g., add mapping to GitHub targets), then use it for migration." >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "📥 Download **repos.csv**, modify if needed (e.g., add GitHub mapping columns), then use it for migration workflows." >> $env:GITHUB_STEP_SUMMARY
