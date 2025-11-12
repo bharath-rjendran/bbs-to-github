@@ -1,215 +1,191 @@
-# Bitbucket Server/DC "pipeline" readiness check
-# - Reads repos.csv with extended header (incl. github_org, github_repo, gh_repo_visibility)
-# - Flags [BLOCKER] for OPEN PRs, INPROGRESS builds, archived repo, missing default branch/commit
-# - Writes output CSV: bbs_pipeline_validation_output-<timestamp>.csv
-# - Emits console markers parsed by the workflow
+name: 0-pr-pipeline-check
 
-param(
-    [Parameter(Mandatory=$false)]
-    [string]$CsvPath = "repos.csv",
+on:
+  workflow_dispatch:
+    inputs:
+      csv_path:
+        description: 'Path to repos CSV file'
+        required: false
+        default: 'repos.csv'
+      trigger_migration:
+        description: 'Automatically trigger migration after successful check?'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      bbs_base_url:
+        description: 'Bitbucket Server/DC base URL (e.g., https://bitbucket.example.com)'
+        required: true
+        type: string
 
-    [Parameter(Mandatory=$false)]
-    [string]$OutputPath = ""
-)
+permissions:
+  contents: read
+  actions: write
 
-$ErrorActionPreference = 'Stop'
+jobs:
+  readiness-check:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    environment: "PAT tokens"
+    outputs:
+      check-passed: ${{ steps.check-result.outputs.passed }}
+      has-blockers: ${{ steps.check-result.outputs.has-blockers }}
 
-# ---- Output path ----
-$timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-    $outputCsvPath = "bbs_pipeline_validation_output-$timestamp.csv"
-} else {
-    $outputCsvPath = $OutputPath
-}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-# ---- Read CSV & validate header ----
-if (-not (Test-Path -Path $CsvPath)) { Write-Host "[ERROR] CSV not found: $CsvPath" -ForegroundColor Red; exit 1 }
-$rows = Import-Csv -Path $CsvPath
-if ($rows.Count -eq 0) { Write-Host "[ERROR] CSV is empty: $CsvPath" -ForegroundColor Red; exit 1 }
+      - name: Run Bitbucket Pipeline Readiness Check
+        id: run-check
+        shell: pwsh
+        env:
+          # Preferred Bitbucket auth: HTTP access token (Bearer)
+          BBS_PAT: ${{ secrets.BBS_PAT }}
+          # Fallback: Basic auth
+          BBS_USERNAME: ${{ secrets.BBS_USERNAME }}
+          BBS_PASSWORD: ${{ secrets.BBS_PASSWORD }}
+          BBS_BASE_URL: ${{ inputs.bbs_base_url }}
+        run: |
+          Write-Host "==================================================" -ForegroundColor Cyan
+          Write-Host " Bitbucket Server/DC Pipeline Readiness Check     " -ForegroundColor Cyan
+          Write-Host "==================================================" -ForegroundColor Cyan
+          Write-Host ""
 
-$required = @(
- 'project-key','project-name','repo','url',
- 'last-commit-date','repo-size-in-bytes','attachments-size-in-bytes',
- 'is-archived','pr-count','github_org','github_repo','gh_repo_visibility'
-)
-$missing = $required | Where-Object { $_ -notin $rows[0].PSObject.Properties.Name }
-if ($missing) {
-    Write-Host "[ERROR] Missing columns in CSV: $($missing -join ', ')" -ForegroundColor Red
-    Write-Host "[ERROR] Required columns: $($required -join ', ')" -ForegroundColor Red
-    exit 1
-}
+          $ErrorActionPreference = 'Continue'
 
-# ---- Bitbucket auth & base URL ----
-$baseUrl = $env:BBS_BASE_URL
-if (-not $baseUrl) { Write-Host "[ERROR] BBS_BASE_URL env var is required." -ForegroundColor Red; exit 1 }
-$baseUrl = $baseUrl.TrimEnd('/')
+          # Run the PS script from repo
+          $output = & .\scripts\0_pr_pipeline_check.ps1 -CsvPath "${{ inputs.csv_path }}" 2>&1
+          $output | ForEach-Object { Write-Host $_ }
 
-function Get-AuthHeaders {
-    $h = @{}
-    if ($env:BBS_PAT) {
-        $h["Authorization"] = "Bearer $($env:BBS_PAT)"
-        return $h
-    } elseif ($env:BBS_USERNAME -and $env:BBS_PASSWORD) {
-        $pair = "$($env:BBS_USERNAME):$($env:BBS_PASSWORD)"
-        $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
-        $h["Authorization"] = "Basic $basic"
-        return $h
-    } else {
-        throw "No Bitbucket credentials provided. Set BBS_PAT or BBS_USERNAME + BBS_PASSWORD."
-    }
-}
-$headers = Get-AuthHeaders
+          # Detect blockers using console markers from the script
+          $outputString = $output | Out-String
+          $hasBlockers = $outputString -match '\[BLOCKER\]'
 
-# ---- REST helpers ----
-function Invoke-BbsGet {
-    param([string]$Url)
-    return Invoke-RestMethod -Method Get -Uri $Url -Headers $headers
-}
-function Invoke-BbsGetPaged {
-    param([string]$Url)
-    $all = @()
-    $start = 0
-    do {
-        $pagedUrl = if ($Url.Contains('?')) { "$Url&start=$start" } else { "$Url?start=$start" }
-        $resp = Invoke-BbsGet -Url $pagedUrl
-        if ($resp.values) { $all += $resp.values }
-        $isLast = $resp.isLastPage
-        $start  = $resp.nextPageStart
-    } while (-not $isLast)
-    return $all
-}
+          if ($hasBlockers) {
+            Write-Host "`n❌ BLOCKERS FOUND - Migration should not proceed" -ForegroundColor Red
+            echo "READINESS_CHECK_PASSED=false" >> $env:GITHUB_ENV
+            echo "HAS_BLOCKERS=true" >> $env:GITHUB_ENV
+          } else {
+            Write-Host "`n✅ NO BLOCKERS FOUND - Safe to proceed with migration" -ForegroundColor Green
+            echo "READINESS_CHECK_PASSED=true" >> $env:GITHUB_ENV
+            echo "HAS_BLOCKERS=false" >> $env:GITHUB_ENV
+          }
 
-# ---- Domain helpers ----
-function Get-DefaultBranch {
-    param([string]$ProjectKey, [string]$RepoSlug)
-    try {
-        $b = Invoke-BbsGet -Url "$baseUrl/rest/api/1.0/projects/$ProjectKey/repos/$RepoSlug/branches/default"
-        if ($b.id -or $b.displayId) { return $b }
-    } catch { }
-    $branches = Invoke-BbsGetPaged -Url "$baseUrl/rest/api/1.0/projects/$ProjectKey/repos/$RepoSlug/branches?limit=100"
-    $default = $branches | Where-Object { $_.isDefault -eq $true } | Select-Object -First 1
-    return $default
-}
-function Get-LatestCommitOnBranch {
-    param([string]$ProjectKey, [string]$RepoSlug, [string]$BranchDisplayId)
-    $q = if ($BranchDisplayId) { "?limit=1&until=$BranchDisplayId" } else { "?limit=1" }
-    $resp = Invoke-BbsGet -Url "$baseUrl/rest/api/1.0/projects/$ProjectKey/repos/$RepoSlug/commits$q"
-    return $resp.values[0]?.id
-}
-function Get-BuildStatuses {
-    param([string]$ProjectKey, [string]$RepoSlug, [string]$CommitId)
-    # Preferred repo-scoped builds resource
-    try {
-        $resp = Invoke-BbsGet -Url "$baseUrl/rest/api/1.0/projects/$ProjectKey/repos/$RepoSlug/commits/$CommitId/builds"
-        if ($resp.values) { return $resp.values }
-    } catch { }
-    # Fallback (deprecated global)
-    try {
-        $resp2 = Invoke-BbsGet -Url "$baseUrl/rest/build-status/latest/commits/$CommitId"
-        if ($resp2.values) { return $resp2.values }
-    } catch { }
-    return @()
-}
-function Get-OpenPrCount {
-    param([string]$ProjectKey, [string]$RepoSlug)
-    $prs = Invoke-BbsGetPaged -Url "$baseUrl/rest/api/1.0/projects/$ProjectKey/repos/$RepoSlug/pull-requests?state=OPEN&limit=100"
-    return ($prs | Measure-Object).Count
-}
+      - name: Set Check Result Output
+        id: check-result
+        shell: pwsh
+        run: |
+          $passed = $env:READINESS_CHECK_PASSED
+          $hasBlockers = $env:HAS_BLOCKERS
+          echo "passed=$passed" >> $env:GITHUB_OUTPUT
+          echo "has-blockers=$hasBlockers" >> $env:GITHUB_OUTPUT
+          if ($passed -eq 'false') {
+            Write-Host "::warning::Readiness check found blockers. Migration is NOT recommended."
+          } else {
+            Write-Host "::notice::Readiness check passed! You can proceed with migration."
+          }
 
-# ---- Processing ----
-$results = New-Object System.Collections.Generic.List[object]
-$blockerRepos = 0
+      - name: Upload precheck outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bbs-precheck-${{ github.run_number }}
+          path: |
+            bbs_pipeline_validation_output-*.csv
+          retention-days: 30
+          if-no-files-found: warn
 
-Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host " Checking PRs & Build Status (Pipeline proxy)      " -ForegroundColor Cyan
-Write-Host "==================================================" -ForegroundColor Cyan
+      - name: Generate Readiness Summary
+        if: always()
+        shell: pwsh
+        run: |
+          $passed = $env:READINESS_CHECK_PASSED
+          $hasBlockers = $env:HAS_BLOCKERS
+          $triggerMigration = "${{ inputs.trigger_migration }}"
+          $csvPath = "${{ inputs.csv_path }}"
 
-foreach ($row in $rows) {
-    $projKey   = $row.'project-key'
-    $repoSlug  = $row.'repo'
-    $archived  = [string]$row.'is-archived'
-    $archivedB = $false
-    if ($archived) {
-        # Accept True/False in various cases
-        $archivedB = ($archived.Trim().ToLower() -eq 'true')
-    }
+          $statusIcon = if ($passed -eq 'true' -and $hasBlockers -eq 'false') { "✅" } else { "❌" }
+          $statusText = if ($passed -eq 'true' -and $hasBlockers -eq 'false') { "PASSED" } else { "FAILED" }
+          $statusColor = if ($passed -eq 'true' -and $hasBlockers -eq 'false') { "🟢" } else { "🔴" }
+          $recommendation = if ($passed -eq 'true' -and $hasBlockers -eq 'false') {
+            "**You can safely proceed with the migration.**"
+          } else {
+            "**Migration is NOT recommended. Please resolve the blockers first.**"
+          }
 
-    # Default branch + latest commit
-    $defaultBranch = Get-DefaultBranch -ProjectKey $projKey -RepoSlug $repoSlug
-    $defaultBranchDisplayId = $defaultBranch?.displayId
-    if (-not $defaultBranchDisplayId -and $defaultBranch?.id) {
-        # refs/heads/master -> master
-        if ($defaultBranch.id -like 'refs/heads/*') {
-            $defaultBranchDisplayId = $defaultBranch.id.Substring(11)
-        }
-    }
-    $latestCommitId = $null
-    if ($defaultBranchDisplayId) {
-        $latestCommitId = Get-LatestCommitOnBranch -ProjectKey $projKey -RepoSlug $repoSlug -BranchDisplayId $defaultBranchDisplayId
-    }
+          $summary = @"
+# 🔎 Bitbucket Pipeline Readiness Check Results
+## Overall Status: $statusColor $statusText
+For repositories in: ``$csvPath``
 
-    # Build statuses on latest commit
-    $statuses = @()
-    if ($latestCommitId) { $statuses = Get-BuildStatuses -ProjectKey $projKey -RepoSlug $repoSlug -CommitId $latestCommitId }
+### Validation Checks Performed
+- ✅ **Open Pull Requests** (`state=OPEN`, paged)
+- ✅ **Running Builds** on latest default-branch commit (Bitbucket build status)
+- ✅ **Archived Repositories**
 
-    $stateCounts = @{ INPROGRESS=0; SUCCESSFUL=0; FAILED=0; CANCELLED=0; UNKNOWN=0 }
-    foreach ($s in $statuses) {
-        $st = ($s.state ?? 'UNKNOWN').ToUpper()
-        if (-not $stateCounts.ContainsKey($st)) { $stateCounts.UNKNOWN++ } else { $stateCounts[$st]++ }
-    }
+### Recommendation
+$recommendation
+"@
 
-    # Open PRs
-    $openPrs = Get-OpenPrCount -ProjectKey $projKey -RepoSlug $repoSlug
+          if ($passed -eq 'true' -and $hasBlockers -eq 'false') {
+            $summary += @"
+#### ✅ Ready to Migrate
+1. Manual trigger your migration workflow.
+2. Verify GitHub mapping in CSV (`github_org`, `github_repo`, `gh_repo_visibility`).
+"@
+            if ($triggerMigration -eq 'true') {
+              $summary += @"
+#### 🚀 Auto-Trigger Enabled
+Migration workflow will be dispatched after this job.
+"@
+            }
+          } else {
+            $summary += @"
+#### ❌ Action Required
+- Resolve OPEN PRs or pause builds (INPROGRESS).
+- Ensure default branch / latest commit are discoverable.
+- Re-run this check.
+"@
+          }
 
-    # Blockers
-    $blockers = @()
-    if ($archivedB) { $blockers += 'ARCHIVED_REPO' }
-    if ($stateCounts.INPROGRESS -gt 0) { $blockers += 'RUNNING_BUILDS' }
-    if ($openPrs -gt 0) { $blockers += 'OPEN_PRS' }
-    if (-not $defaultBranchDisplayId) { $blockers += 'NO_DEFAULT_BRANCH' }
-    if (-not $latestCommitId) { $blockers += 'NO_LATEST_COMMIT' }
+          $summary += @"
+---
+📅 **Check Date**: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC")
+📁 **CSV File**: ``$csvPath``
+🔗 **Bitbucket Base URL**: `${{ inputs.bbs_base_url }}`
+"@
 
-    if ($blockers.Count -gt 0) {
-        $blockerRepos++
-        Write-Host ("[BLOCKER] {0}/{1} | PRs(Open): {2} | Builds(InProg/Fail/Succ): {3}/{4}/{5} | Blockers: {6}" -f `
-          $projKey, $repoSlug, $openPrs, $stateCounts.INPROGRESS, $stateCounts.FAILED, $stateCounts.SUCCESSFUL, ($blockers -join ',')) -ForegroundColor Red
-    } else {
-        Write-Host ("[OK] {0}/{1} | PRs(Open): {2} | Builds(InProg/Fail/Succ): {3}/{4}/{5}" -f `
-          $projKey, $repoSlug, $openPrs, $stateCounts.INPROGRESS, $stateCounts.FAILED, $stateCounts.SUCCESSFUL) -ForegroundColor Green
-    }
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
 
-    # Write result row (preserve GitHub mapping columns)
-    $obj = [PSCustomObject]@{
-        project_key            = $projKey
-        project_name           = $row.'project-name'
-        repo_slug              = $repoSlug
-        url                    = $row.'url'
-        github_org             = $row.'github_org'
-        github_repo            = $row.'github_repo'
-        gh_repo_visibility     = $row.'gh_repo_visibility'
-        default_branch         = $defaultBranchDisplayId
-        latest_commit_id       = $latestCommitId
-        build_inprogress_count = $stateCounts.INPROGRESS
-        build_success_count    = $stateCounts.SUCCESSFUL
-        build_failed_count     = $stateCounts.FAILED
-        build_cancelled_count  = $stateCounts.CANCELLED
-        open_pr_count          = $openPrs
-        is_archived            = $archivedB
-        blockers               = ($blockers -join ';')
-    }
-    $results.Add($obj)
-}
+      - name: Fail if Blockers Found (Optional)
+        if: env.HAS_BLOCKERS == 'true'
+        shell: pwsh
+        run: |
+          Write-Host "::warning::Blockers found. Workflow continues (soft gate)."
+          # Uncomment to hard fail:
+          # exit 1
 
-# ---- Output CSV ----
-$results | Export-Csv -Path $outputCsvPath -NoTypeInformation
-Write-Host "[INFO] Wrote precheck CSV: $outputCsvPath" -ForegroundColor Cyan
-
-# ---- Summary ----
-$runningBuildsRepos = ($results | Where-Object { $_.build_inprogress_count -gt 0 } | Measure-Object).Count
-$reposWithOpenPRs   = ($results | Where-Object { $_.open_pr_count -gt 0 } | Measure-Object).Count
-$openPrsTotal       = ($results | Measure-Object -Property open_pr_count -Sum).Sum
-
-Write-Host "`n[SUMMARY] Total repos: $($rows.Count)" -ForegroundColor Green
-Write-Host ("Repos with RUNNING builds: {0}" -f $runningBuildsRepos) -ForegroundColor Green
-Write-Host ("Repos with OPEN PRs:       {0} (total open PRs: {1})" -f $reposWithOpenPRs, $openPrsTotal) -ForegroundColor Green
-Write-Host ("Repos with BLOCKERS:       {0}" -f $blockerRepos) -ForegroundColor Green
+  trigger-migration:
+    needs: readiness-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Migration Workflow (only when passed & no blockers)
+        if: ${{ github.event.inputs.trigger_migration == 'true' && needs['readiness-check'].outputs['check-passed'] == 'true' && needs['readiness-check'].outputs['has-blockers'] == 'false' }}
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_PAT }}
+          script: |
+            console.log('✅ Readiness check passed! Triggering migration workflow...');
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: '1-migration.yml',
+              ref: 'main',
+              inputs: {
+                csv_path: '${{ inputs.csv_path }}',
+                max_concurrent: '3'
+              }
+            });
+            console.log('🚀 Migration workflow triggered successfully!');
