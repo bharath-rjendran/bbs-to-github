@@ -6,14 +6,20 @@ on:
       csv_path:
         description: 'Path to CSV file with repository list'
         required: true
-        default: ''
+        type: string
+      bbs_base_url:
+        description: 'Bitbucket Server/DC base URL, e.g. https://bitbucket.example.com'
+        required: true
         type: string
   workflow_call:
     inputs:
       csv_path:
         description: 'Path to CSV file with repository list'
-        required: false
-        default: ''
+        required: true
+        type: string
+      bbs_base_url:
+        description: 'Bitbucket Server/DC base URL, e.g. https://bitbucket.example.com'
+        required: true
         type: string
 
 permissions:
@@ -22,10 +28,11 @@ permissions:
 
 jobs:
   validate-migrations:
-    name: Validate Migrated Repositories (BBS â†’ GH)
+    name: Validate Migrated Repositories (BBS to GH)
     runs-on: windows-latest
     timeout-minutes: 120
     environment: PAT tokens
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -47,49 +54,63 @@ jobs:
           Write-Host "Verifying installation..."
           gh bbs2gh --help
 
+      - name: Resolve inputs to environment
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            echo "CSV_FILE=${{ github.event.inputs.csv_path }}" >> $env:GITHUB_ENV
+            echo "BBS_BASE_URL=${{ github.event.inputs.bbs_base_url }}" >> $env:GITHUB_ENV
+          }
+          else {
+            echo "CSV_FILE=${{ inputs.csv_path }}" >> $env:GITHUB_ENV
+            echo "BBS_BASE_URL=${{ inputs.bbs_base_url }}" >> $env:GITHUB_ENV
+          }
+
+      - name: Validate Inputs
+        shell: pwsh
+        run: |
+          if (-not $env:CSV_FILE)     { throw "csv_path is required" }
+          if (-not $env:BBS_BASE_URL) { throw "bbs_base_url is required" }
+          Write-Host "CSV_FILE=$env:CSV_FILE"
+          Write-Host "BBS_BASE_URL=$env:BBS_BASE_URL"
+
       - name: Validate CSV File & Columns
         shell: pwsh
         run: |
-          $csvPath = "${{ inputs.csv_path }}"
+          $csvPath = $env:CSV_FILE
           if (-not (Test-Path $csvPath)) {
             Write-Error "CSV file not found: $csvPath"
             exit 1
           }
           Write-Host "CSV file found: $csvPath"
 
-          # Validate required columns based on your header
           $csv = Import-Csv -Path $csvPath
-          $required = @(
-            'project-key', # BBS project key
-            'repo',        # BBS repo slug/name
-            'url',         # Full repo URL
-            'github_org',  # Destination org
-            'github_repo'  # Destination repo
-          )
+          if (-not $csv -or $csv.Count -eq 0) {
+            Write-Error "CSV appears empty: $csvPath"
+            exit 1
+          }
+
+          $required = @('project-key','repo','url','github_org','github_repo')
           $cols = $csv[0].PSObject.Properties.Name
           $missing = $required | Where-Object { $_ -notin $cols }
           if ($missing.Count -gt 0) {
             Write-Error ("Missing required columns in CSV: {0}" -f ($missing -join ', '))
             exit 1
           }
-          Write-Host "âœ… CSV structure validation passed"
+          Write-Host "✅ CSV structure validation passed"
           Write-Host "Total repositories to validate: $($csv.Count)"
 
-      - name: Run Migration Validation (BBS â†’ GH)
+      - name: Run Migration Validation (BBS to GH)
         shell: pwsh
         env:
-          GH_PAT:         ${{ secrets.GH_PAT }}
-          GH_TOKEN:       ${{ secrets.GH_PAT }} # used by gh cli
-          # Choose ONE auth mode for Bitbucket Server/DC:
-          # 1) Bearer token (recommended on modern Bitbucket DC): set BBS_TOKEN and (optionally) BBS_AUTH_TYPE=Bearer
-          BBS_TOKEN:      ${{ secrets.BBS_TOKEN }}
-          BBS_AUTH_TYPE:  ${{ secrets.BBS_AUTH_TYPE }} # 'Bearer' (default when BBS_TOKEN present) or 'Basic'
-          # 2) Basic auth (older servers or if you prefer): set BBS_USERNAME and BBS_PASSWORD and BBS_AUTH_TYPE=Basic
-          BBS_USERNAME:   ${{ secrets.BBS_USERNAME }}
-          BBS_PASSWORD:   ${{ secrets.BBS_PASSWORD }}
-          CSV_FILE: ${{ inputs.csv_path }}
+          GH_PAT:        ${{ secrets.GH_PAT }}
+          GH_TOKEN:      ${{ secrets.GH_PAT }}
+          BBS_TOKEN:     ${{ secrets.BBS_TOKEN }}
+          BBS_AUTH_TYPE: ${{ secrets.BBS_AUTH_TYPE }}
+          BBS_USERNAME:  ${{ secrets.BBS_USERNAME }}
+          BBS_PASSWORD:  ${{ secrets.BBS_PASSWORD }}
         run: |
-          .\scripts\2_migration_validation_bbs.ps1 -CsvPath "${{ inputs.csv_path }}"
+          .\scripts\2_migration_validation_bbs.ps1 -CsvPath "$env:CSV_FILE" -BbsBaseUrl "$env:BBS_BASE_URL"
 
       - name: Upload Validation Results
         if: always()
@@ -105,11 +126,12 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          Write-Host "## BBS â†’ GH Migration Validation Summary" >> $env:GITHUB_STEP_SUMMARY
-          Write-Host ""                               >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "## BBS to GH Migration Validation Summary" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "" >> $env:GITHUB_STEP_SUMMARY
           Write-Host "**Run Number:** ${{ github.run_number }}" >> $env:GITHUB_STEP_SUMMARY
-          Write-Host "**CSV Path:** ${{ inputs.csv_path }}"     >> $env:GITHUB_STEP_SUMMARY
-          Write-Host ""                               >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "**CSV Path:** $env:CSV_FILE" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "**Bitbucket Base URL:** $env:BBS_BASE_URL" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "" >> $env:GITHUB_STEP_SUMMARY
 
           $logFile = Get-ChildItem -Filter "validation-log-*.txt" |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -121,5 +143,4 @@ jobs:
             Get-Content $logFile.FullName -Tail 50 | ForEach-Object { $_ >> $env:GITHUB_STEP_SUMMARY }
             Write-Host '```' >> $env:GITHUB_STEP_SUMMARY
             Write-Host "" >> $env:GITHUB_STEP_SUMMARY
-            Write-Host "ðŸ“ˆ Full validation results are in workflow artifacts." >> $env:GITHUB_STEP_SUMMARY
-          }
+            Write-Host "📈 Full validation results are in workflow artifacts." >> $env:GITHUB_STEP_SUMMARY
