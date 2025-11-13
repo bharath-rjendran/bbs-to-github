@@ -1,0 +1,192 @@
+name: 4-mannequins-reclaim
+
+on:
+  workflow_dispatch:
+    inputs:
+      github_org:
+        description: 'GitHub organization name'
+        required: true
+        type: string
+      csv_file:
+        description: 'CSV file path (leave empty to download from artifacts)'
+        required: false
+        default: ''
+        type: string
+      skip_invitation:
+        description: 'Skip sending invitation emails'
+        required: false
+        default: false
+        type: boolean
+      artifact_run_number:
+        description: 'Run number of the validation workflow to download CSV from (if csv_file is empty)'
+        required: false
+        type: string
+  
+  workflow_call:
+    inputs:
+      github_org:
+        description: 'GitHub organization name'
+        required: true
+        type: string
+      csv_file:
+        description: 'CSV file path (leave empty to download from artifacts)'
+        required: false
+        default: ''
+        type: string
+      skip_invitation:
+        description: 'Skip sending invitation emails'
+        required: false
+        default: false
+        type: boolean
+      artifact_run_number:
+        description: 'Run number of the validation workflow to download CSV from (if csv_file is empty)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  reclaim-mannequins:
+    name: Reclaim Mannequins
+    runs-on: windows-latest
+    timeout-minutes: 60
+    environment: PAT tokens
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: Setup GitHub CLI
+        run: |
+          # Verify gh CLI is available
+          gh --version
+          
+          # Configure git
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+        shell: pwsh
+      
+      - name: Install gh ado2gh extension
+        run: |
+          Write-Host "Installing gh ado2gh extension..."
+          gh extension install github/gh-ado2gh
+          
+          Write-Host "Verifying installation..."
+          gh ado2gh version
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+      
+      - name: Download Mannequin CSV from Artifacts
+        if: inputs.csv_file == ''
+        uses: actions/download-artifact@v4
+        with:
+          name: mannequins-csv-${{ inputs.artifact_run_number != '' && inputs.artifact_run_number || github.run_number }}
+          path: .
+        continue-on-error: true
+      
+      - name: Verify CSV File
+        id: verify-csv
+        run: |
+          $csvFile = "${{ inputs.csv_file }}"
+          
+          # If no csv_file provided, look for downloaded artifact
+          if ([string]::IsNullOrEmpty($csvFile)) {
+            Write-Host "No CSV file specified, searching for downloaded artifacts..."
+            $foundCsv = Get-ChildItem -Filter "mannequins*.csv" | Select-Object -First 1
+            
+            if ($foundCsv) {
+              $csvFile = $foundCsv.FullName
+              Write-Host "Found CSV file: $csvFile"
+              "csv_path=$csvFile" >> $env:GITHUB_OUTPUT
+            } else {
+              Write-Error "No CSV file found. Please specify csv_file input or ensure artifact is available."
+              exit 1
+            }
+          } else {
+            Write-Host "Using specified CSV file: $csvFile"
+            "csv_path=$csvFile" >> $env:GITHUB_OUTPUT
+          }
+          
+          # Verify file exists
+          if (-not (Test-Path $csvFile)) {
+            Write-Error "CSV file not found: $csvFile"
+            exit 1
+          }
+          
+          # Show CSV preview
+          Write-Host "`n=== CSV Preview ==="
+          Import-Csv -Path $csvFile | Select-Object -First 5 | Format-Table -AutoSize
+          
+          $mannequinCount = (Import-Csv -Path $csvFile | Measure-Object).Count
+          Write-Host "`nTotal mannequins to reclaim: $mannequinCount"
+          "mannequin_count=$mannequinCount" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+      
+      - name: Reclaim Mannequins
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          $csvPath = "${{ steps.verify-csv.outputs.csv_path }}"
+          $skipInvitation = $${{ inputs.skip_invitation }}
+          
+          Write-Host "Starting mannequin reclaim process..."
+          Write-Host "CSV File: $csvPath"
+          Write-Host "GitHub Org: ${{ inputs.github_org }}"
+          Write-Host "Skip Invitation: $skipInvitation"
+          Write-Host ""
+          
+          # Build command with parameters
+          $params = @{
+            GithubOrg = "${{ inputs.github_org }}"
+            CsvFile = $csvPath
+          }
+          
+          if ($skipInvitation) {
+            $params.SkipInvitation = $true
+          }
+          
+          # Execute reclaim script
+          .\scripts\4_mannequins_reclaim.ps1 @params
+        shell: pwsh
+      
+      - name: Upload Reclaim Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mannequin-reclaim-results-${{ github.run_number }}
+          path: |
+            mannequins*.csv
+            reclaim-*.log
+          retention-days: 90
+          if-no-files-found: warn
+      
+      - name: Generate Workflow Summary
+        if: always()
+        run: |
+          Write-Host "## Mannequin Reclaim Summary" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "**Run Number:** ${{ github.run_number }}" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "**GitHub Org:** ${{ inputs.github_org }}" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "**CSV File:** ${{ steps.verify-csv.outputs.csv_path }}" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "**Mannequins Processed:** ${{ steps.verify-csv.outputs.mannequin_count }}" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "**Skip Invitation:** ${{ inputs.skip_invitation }}" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "" >> $env:GITHUB_STEP_SUMMARY
+          
+          Write-Host "### 📋 Process Information" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "The mannequin reclaim process maps placeholder users created during migration" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "to actual GitHub users in your organization." >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "" >> $env:GITHUB_STEP_SUMMARY
+          
+          if ("${{ inputs.skip_invitation }}" -eq "true") {
+            Write-Host "⚠️ **Invitation emails were skipped** - Users will need to accept invitations manually" >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            Write-Host "✅ **Invitation emails were sent** - Users will receive email notifications" >> $env:GITHUB_STEP_SUMMARY
+          }
+          Write-Host "" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "📦 Check artifacts for detailed results and logs" >> $env:GITHUB_STEP_SUMMARY
+        shell: pwsh
