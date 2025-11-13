@@ -199,7 +199,19 @@ jobs:
           path: migration-*.txt
           retention-days: 90
           if-no-files-found: warn
-
+      
+      - name: Upload Verbose Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verbose-logs
+          path: |
+            *.log
+            **/*.log
+            logs/**/*.log
+          retention-days: 90
+          if-no-files-found: warn
+          
       - name: Upload Output CSV
         if: always()
         uses: actions/upload-artifact@v4
