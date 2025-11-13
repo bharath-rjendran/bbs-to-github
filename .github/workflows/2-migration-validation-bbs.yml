@@ -126,21 +126,25 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          Write-Host "## BBS to GH Migration Validation Summary" >> $env:GITHUB_STEP_SUMMARY
-          Write-Host "" >> $env:GITHUB_STEP_SUMMARY
-          Write-Host "**Run Number:** ${{ github.run_number }}" >> $env:GITHUB_STEP_SUMMARY
-          Write-Host "**CSV Path:** $env:CSV_FILE" >> $env:GITHUB_STEP_SUMMARY
-          Write-Host "**Bitbucket Base URL:** $env:BBS_BASE_URL" >> $env:GITHUB_STEP_SUMMARY
-          Write-Host "" >> $env:GITHUB_STEP_SUMMARY
+          $summary = @()
+          $summary += "## BBS to GH Migration Validation Summary"
+          $summary += ""
+          $summary += "**Run Number:** ${{ github.run_number }}"
+          $summary += "**CSV Path:** $env:CSV_FILE"
+          $summary += "**Bitbucket Base URL:** $env:BBS_BASE_URL"
+          $summary += ""
 
           $logFile = Get-ChildItem -Filter "validation-log-*.txt" |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
-          if ($logFile) {
-            Write-Host "### Validation Log Preview" >> $env:GITHUB_STEP_SUMMARY
-            Write-Host "" >> $env:GITHUB_STEP_SUMMARY
-            Write-Host '```' >> $env:GITHUB_STEP_SUMMARY
-            Get-Content $logFile.FullName -Tail 50 | ForEach-Object { $_ >> $env:GITHUB_STEP_SUMMARY }
-            Write-Host '```' >> $env:GITHUB_STEP_SUMMARY
-            Write-Host "" >> $env:GITHUB_STEP_SUMMARY
-            Write-Host "📈 Full validation results are in workflow artifacts." >> $env:GITHUB_STEP_SUMMARY
+          if ($null -ne $logFile) {
+            $summary += "### Validation Log Preview"
+            $summary += ""
+            $summary += '```'
+            $summary += (Get-Content $logFile.FullName -Tail 50)
+            $summary += '```'
+            $summary += ""
+            $summary += "📈 Full validation results are in workflow artifacts."
+          }
+
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
