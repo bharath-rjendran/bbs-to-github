@@ -161,6 +161,7 @@ jobs:
             validation-summary.md
           retention-days: 30
 
+      # ⬇️ NEW: ensure the summary contains ONLY the table
       - name: Reset Summary (table-only)
         if: always()
         shell: pwsh
