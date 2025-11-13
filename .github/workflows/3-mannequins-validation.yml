@@ -1,0 +1,151 @@
+name: 3-mannequins-validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      github_org:
+        description: 'GitHub organization name'
+        required: true
+        type: string
+      output_file:
+        description: 'Output CSV file name'
+        required: false
+        default: 'mannequins.csv'
+        type: string
+      trigger_reclaim:
+        description: 'Automatically trigger mannequin reclaim after validation'
+        required: false
+        default: false
+        type: boolean
+  
+  workflow_call:
+    inputs:
+      github_org:
+        description: 'GitHub organization name'
+        required: true
+        type: string
+      output_file:
+        description: 'Output CSV file name'
+        required: false
+        default: 'mannequins.csv'
+        type: string
+      trigger_reclaim:
+        description: 'Automatically trigger mannequin reclaim after validation'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  validate-mannequins:
+    name: Generate Mannequin CSV
+    runs-on: windows-latest
+    timeout-minutes: 30
+    environment: PAT tokens
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: Setup GitHub CLI
+        run: |
+          # Verify gh CLI is available
+          gh --version
+          
+          # Configure git
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+        shell: pwsh
+      
+      - name: Install gh ado2gh extension
+        run: |
+          Write-Host "Installing gh ado2gh extension..."
+          gh extension install github/gh-ado2gh
+          
+          Write-Host "Verifying installation..."
+          gh ado2gh version
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+      
+      - name: Generate Mannequin CSV
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          # Execute mannequin validation script
+          .\scripts\3_mannequins_validation.ps1 `
+            -GithubOrg "${{ inputs.github_org }}" `
+            -OutputFile "${{ inputs.output_file }}"
+        shell: pwsh
+      
+      - name: Upload Mannequin CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mannequins-csv-${{ github.run_number }}
+          path: mannequins*.csv
+          retention-days: 90
+          if-no-files-found: warn
+      
+      - name: Generate Workflow Summary
+        if: always()
+        run: |
+          Write-Host "## Mannequin Validation Summary" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "**Run Number:** ${{ github.run_number }}" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "**GitHub Org:** ${{ inputs.github_org }}" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "**Output File:** ${{ inputs.output_file }}" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "" >> $env:GITHUB_STEP_SUMMARY
+          
+          # Check if mannequin CSV exists and show preview
+          $csvFile = "${{ inputs.output_file }}"
+          if (Test-Path $csvFile) {
+            $mannequins = Import-Csv -Path $csvFile
+            $count = ($mannequins | Measure-Object).Count
+            
+            Write-Host "### 📊 Mannequins Found: $count" >> $env:GITHUB_STEP_SUMMARY
+            Write-Host "" >> $env:GITHUB_STEP_SUMMARY
+            
+            if ($count -gt 0) {
+              Write-Host "### Top 10 Mannequins:" >> $env:GITHUB_STEP_SUMMARY
+              Write-Host "" >> $env:GITHUB_STEP_SUMMARY
+              Write-Host '```' >> $env:GITHUB_STEP_SUMMARY
+              $mannequins | Select-Object -First 10 | Format-Table -AutoSize | Out-String | ForEach-Object { $_ >> $env:GITHUB_STEP_SUMMARY }
+              Write-Host '```' >> $env:GITHUB_STEP_SUMMARY
+              Write-Host "" >> $env:GITHUB_STEP_SUMMARY
+              Write-Host "💡 Download full CSV from artifacts below" >> $env:GITHUB_STEP_SUMMARY
+            } else {
+              Write-Host "✅ No mannequins found - all users have been reclaimed or no migration mannequins exist" >> $env:GITHUB_STEP_SUMMARY
+            }
+          } else {
+            Write-Host "⚠️ Mannequin CSV file not found" >> $env:GITHUB_STEP_SUMMARY
+          }
+        shell: pwsh
+  
+  trigger-reclaim:
+    name: Trigger Mannequin Reclaim
+    needs: validate-mannequins
+    if: github.event.inputs.trigger_reclaim == 'true' || inputs.trigger_reclaim == true
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Trigger Reclaim Workflow
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_PAT }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: '4-mannequins-reclaim.yml',
+              ref: context.ref,
+              inputs: {
+                github_org: '${{ inputs.github_org }}',
+                csv_file: '${{ inputs.output_file }}'
+              }
+            });
+            console.log('✅ Mannequin reclaim workflow triggered successfully');
