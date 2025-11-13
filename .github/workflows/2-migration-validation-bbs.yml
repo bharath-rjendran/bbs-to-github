@@ -11,6 +11,7 @@ on:
         description: 'Bitbucket Server/DC base URL'
         required: true
         type: string
+
   # workflow_call:
   #   inputs:
   #     csv_path:
@@ -37,8 +38,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Divert the job summary early so any step that writes to summary
-      # goes into a throwaway file. We'll restore the real summary at the end.
+      # Divert the job summary early; restore at the end (table-only summary)
       - name: Divert job summary to a temp file (ensure table-only later)
         shell: pwsh
         run: |
@@ -140,7 +140,6 @@ jobs:
           retention-days: 30
 
       # --- TABLE-ONLY SUMMARY ---
-      # Restore the real summary file and clear it.
       - name: Restore real summary and clear it
         if: always()
         shell: pwsh
@@ -150,7 +149,6 @@ jobs:
           [System.IO.File]::WriteAllText($env:GITHUB_STEP_SUMMARY, [string]::Empty)
           Write-Host "Restored summary path: $env:GITHUB_STEP_SUMMARY (cleared)"
 
-      # Append ONLY the Markdown table (no logs)
       - name: Append Table Summary (ONLY)
         if: always()
         shell: pwsh
