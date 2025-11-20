@@ -12,12 +12,12 @@ $ErrorActionPreference = 'Stop'
 Write-Host "==> Generating mannequin CSV for org '$GithubOrg'..."
 
 # Run the gh ado2gh command directly
-$cmdOutput = & gh ado2gh generate-mannequin-csv --github-org $GithubOrg --output $OutputFile 2>&1
+$cmdOutput = & gh bbs2gh generate-mannequin-csv --github-org $GithubOrg --output $OutputFile 2>&1
 $exit = $LASTEXITCODE
 
 if ($exit -ne 0) {
   Write-Host $cmdOutput
-  throw "gh ado2gh generate-mannequin-csv failed with exit code $exit."
+  throw "gh bbs2gh generate-mannequin-csv failed with exit code $exit."
 }
 
 # Validate the CSV and show a quick summary
