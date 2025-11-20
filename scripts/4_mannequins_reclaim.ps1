@@ -20,7 +20,7 @@ if (-not (Test-Path -LiteralPath $CsvFile)) {
 
 # Build command arguments
 $args = @(
-  "ado2gh", "reclaim-mannequin",
+  "bbs2gh", "reclaim-mannequin",
   "--github-org", $GithubOrg,
   "--csv", $CsvFile
 )
