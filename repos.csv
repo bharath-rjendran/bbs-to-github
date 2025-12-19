@@ -1,12 +1,8 @@
-project-key,project-name,repo,url,last-commit-date,repo-size-in-bytes,attachments-size-in-bytes,is-archived,pr-count,github_org,github_repo,gh_repo_visibility
-MIG,MigrationDemo,calotracker,http://3.110.191.216:7990/projects/MIG/repos/calotracker,9/7/2025 20:15,3141632,0,FALSE,2,test-19-yash,calotracker,private
-MIG,MigrationDemo,github-actions-lab10,http://3.110.191.216:7990/projects/MIG/repos/github-actions-lab10,,36864,0,FALSE,0,test-19-yash,github-actions-lab10,private
-MIG,MigrationDemo,Greetings,http://3.110.191.216:7990/projects/MIG/repos/greetings,,61440,0,FALSE,0,test-19-yash,Greetings,private
-MIG,MigrationDemo,hello-world-repo,http://3.110.191.216:7990/projects/MIG/repos/hello-world-repo,,110592,0,FALSE,0,test-19-yash,hello-world-repo,private
-MIG,MigrationDemo,lab4,http://3.110.191.216:7990/projects/MIG/repos/lab4,,1801216,0,FALSE,0,test-19-yash,lab4,private
-MIG,MigrationDemo,my-app-2,http://3.110.191.216:7990/projects/MIG/repos/my-app-2,10/8/2025 15:40,208896,0,FALSE,2,test-19-yash,my-app-2,private
-
-
-
-
-
+project-key,project-name,repo,url,last-commit-date,repo-size-in-bytes,attachments-size-in-bytes,is-archived,pr-count
+BBSMIG,bbs-migration-demo,calotracker,http://20.84.89.88:7990/projects/BBSMIG/repos/calotracker,2025-09-07 08:15 PM,3141632,0,False,0
+BBSMIG,bbs-migration-demo,lab8,http://20.84.89.88:7990/projects/BBSMIG/repos/lab8,,217088,0,False,0
+BBSMIG,bbs-migration-demo,MavenHelloWorld,http://20.84.89.88:7990/projects/BBSMIG/repos/mavenhelloworld,2025-12-08 10:16 AM,27648,0,False,0
+BBSMIG,bbs-migration-demo,solar-system,http://20.84.89.88:7990/projects/BBSMIG/repos/solar-system,2025-09-08 10:23 AM,2137088,0,False,1
+BBSMIG,bbs-migration-demo,solid-api,http://20.84.89.88:7990/projects/BBSMIG/repos/solid-api,2025-12-18 11:58 AM,625664,0,False,2
+BBSMIG,bbs-migration-demo,Test21,http://20.84.89.88:7990/projects/BBSMIG/repos/test21,2025-12-10 07:00 AM,172032,0,False,0
+BBSMIG,bbs-migration-demo,voting_app,http://20.84.89.88:7990/projects/BBSMIG/repos/voting_app,,45056,0,False,0
