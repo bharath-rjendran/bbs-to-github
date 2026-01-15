@@ -25,8 +25,8 @@ Set in **Settings → Secrets and variables → Actions**:
 - `GH_PAT` — GitHub PAT used by `gh` and validation/migration steps. citeturn1search3turn1search2
 - Bitbucket auth (choose one):
   - `BBS_PAT` **or** (`BBS_USERNAME`, `BBS_PASSWORD`) — used by readiness & migration. citeturn1search1turn1search3
-- (Optional, if used by validation): `BBS_TOKEN`, `BBS_AUTH_TYPE`. citeturn1search2
-- (Optional, if your migration uses SSH): `SSH_USER`, `SSH_PRIVATE_KEY`. citeturn1search3
+- (Optional, if used by validation): `BBS_TOKEN`, `BBS_AUTH_TYPE`. 
+- `SSH_USER`, `SSH_PRIVATE_KEY`.
 
 > The workflow grants `contents: read`, `actions: write`, and `issues: write` permissions; `issues: write` is required for the manual approval step.
 
@@ -35,7 +35,6 @@ Set in **Settings → Secrets and variables → Actions**:
 - `csv_path` (string, required): Path to repositories CSV (e.g., `repos.csv`). citeturn1search1turn1search3turn1search2
 - `bbs_base_url` (string, required): Bitbucket Server/DC base URL. citeturn1search1turn1search3
 - `max_concurrent` (choice, default `5`): Concurrent migrations for `1_migration.ps1`. citeturn1search3
-- `gh_host` (optional): GHES hostname if applicable (used in validation). citeturn1search2
 
 ## Configure Approvers (mandatory)
 
