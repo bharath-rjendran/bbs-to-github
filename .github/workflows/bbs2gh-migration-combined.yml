@@ -1,4 +1,3 @@
-
 name: bbs-to-gh-migration (combined)
 
 on:
@@ -19,10 +18,15 @@ on:
         default: '5'
         type: choice
         options: ['1','2','3','4','5']
+      gh_host:
+        description: '(Optional) GHES host, e.g., github.example.com'
+        required: false
+        type: string
 
 permissions:
   contents: read
   actions: write
+  issues: write   # needed for the issue-based manual approval step
 
 jobs:
   readiness-check:
@@ -79,7 +83,6 @@ jobs:
           $data = Import-Csv $outCsv.FullName
 
           # PR-only: treat any repo with open_pr_count > 0 as a WARNING (not a blocker)
-          # Some outputs also place tags into 'blockers'. We ignore non-PR tags entirely here.
           $openPrRepos = $data | Where-Object { [int]($_.open_pr_count) -gt 0 }
           $openPrCount = ($openPrRepos | Measure-Object).Count
 
@@ -108,7 +111,6 @@ jobs:
           } else {
             Write-Host "::notice::PR-only check clean."
           }
-        # (Derived from your original readiness job, but narrowed to PR-only and relabeled to Warnings) [1](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/0-pr-pipeline-check.yml)
 
       - name: Upload PR check outputs
         if: always()
@@ -118,7 +120,6 @@ jobs:
           path: bbs_pipeline_validation_output-*.csv
           retention-days: 30
           if-no-files-found: warn
-        # (Keeps artifact behavior from the original) [1](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/0-pr-pipeline-check.yml)
 
       - name: Generate PR Check Summary
         if: always()
@@ -157,34 +158,35 @@ jobs:
               }
             }
           }
-        
 
   # ----------------------------------------------------------------
-  # Job 2: Approval gate — ALWAYS runs (requires reviewers on environment)
+  # Job 2: Approval gate — ALWAYS runs (issue-based approval)
   # ----------------------------------------------------------------
   approval-gate:
     name: ✅ Manual Approval to Proceed
     runs-on: ubuntu-latest
     needs: [readiness-check]
-    # Always show approval, regardless of warnings or open PRs
-    environment:
-      name: migration-approval
-      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - name: Waiting for approval
+      - name: Context
         run: |
           echo "Approval is required to proceed to migration."
           echo "Open PRs detected: ${{ needs.readiness-check.outputs.open-pr-count }}"
           echo "Warnings present:   ${{ needs.readiness-check.outputs.has-warnings }}"
 
       - name: Wait for manual approval
-        uses: akefirad/manual-approval-action@main
+        uses: trstringer/manual-approval@v1
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          timeout-seconds: 86400         # e.g., wait up to 24 hours
-          approval-keywords: "approved!"
-          rejections-keywords: "cancel,reject!"
-          fail-on-rejection: true
+          secret: ${{ github.token }}
+          approvers: your-team,alice,bob
+          minimum-approvals: 1
+          issue-title: "Approve migration to GitHub"
+          issue-body: |
+            Please review PR readiness summary in the job above.
+            Comment **approved** to proceed, or **deny** to stop.
+          exclude-workflow-initiator-as-approver: false
+          fail-on-denial: true
+          polling-interval-seconds: 30
+
   # ----------------------------------------------------------------
   # Job 3: Migration — unchanged functional logic from 1-migration.yml
   # ----------------------------------------------------------------
@@ -217,7 +219,6 @@ jobs:
           gh extension install github/gh-bbs2gh
           Write-Host "`nVerifying installation:" -ForegroundColor Cyan
           gh bbs2gh --version
-        # (Sourced from your migration workflow) [2](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/1-migration.yml)
 
       - name: Validate CSV File
         shell: pwsh
@@ -245,7 +246,6 @@ jobs:
             exit 1
           }
           Write-Host "[SUCCESS] CSV validation passed" -ForegroundColor Green
-        # (Same validation as your original) [2](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/1-migration.yml)
 
       - name: Run Concurrent Migration
         shell: pwsh
@@ -261,7 +261,6 @@ jobs:
           .\scripts\1_migration.ps1 `
             -MaxConcurrent ${{ inputs.max_concurrent }} `
             -CsvPath "${{ inputs.csv_path }}"
-        # (Migration script and env carried over) [2](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/1-migration.yml)
 
       - name: Generate Migration Summary
         if: always()
@@ -285,7 +284,6 @@ jobs:
           } else {
             Write-Host "[WARNING] No output CSV found" -ForegroundColor Yellow
           }
-        # (Summarization kept from original, compacted) [2](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/1-migration.yml)
 
       - name: Upload Migration Logs
         if: always()
@@ -295,6 +293,7 @@ jobs:
           path: migration-*.txt
           retention-days: 90
           if-no-files-found: warn
+
       - name: Upload Verbose Logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -306,6 +305,7 @@ jobs:
             logs/**/*.log
           retention-days: 90
           if-no-files-found: warn
+
       - name: Upload Output CSV
         if: always()
         uses: actions/upload-artifact@v4
@@ -314,7 +314,6 @@ jobs:
           path: repo_migration_output-*.csv
           retention-days: 90
           if-no-files-found: error
-        # (Artifacts consistent with your original) [2](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/1-migration.yml)
 
   # ----------------------------------------------------------------
   # Job 4: Post-migration validation — from 2-migration-validation-bbs.yml
@@ -378,7 +377,6 @@ jobs:
           }
           Write-Host "✅ CSV structure validation passed"
           Write-Host "Total repositories to validate: $($csv.Count)"
-        # (All derived from your validation workflow) [3](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/2-migration-validation-bbs.yml)
 
       - name: Run Migration Validation (BBS to GH)
         shell: pwsh
@@ -429,4 +427,3 @@ jobs:
           } else {
             Write-Host "validation-summary.md not found; skipping summary table."
           }
-        # (Table-only summary preserved) [3](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/2-migration-validation-bbs.yml)
