@@ -25,10 +25,6 @@ permissions:
   actions: write
 
 jobs:
-  # ----------------------------------------------------------------
-  # Job 1: Readiness check (PR-only) — adapted from 0-pr-pipeline-check
-  # Replaces "Blockers" with "Warnings"
-  # ----------------------------------------------------------------
   readiness-check:
     name: PR Readiness Check (PR-only)
     runs-on: windows-latest
@@ -59,8 +55,7 @@ jobs:
             Write-Host "::error::Missing required values: $($missing -join ', ')"
             exit 1
           }
-      # Reuse your existing script but only evaluate PR-related output columns
-      # from the generated CSV. Everything else becomes irrelevant to gating.
+
       - name: Run PR Readiness (PR-only)
         id: run-check
         shell: pwsh
@@ -162,7 +157,7 @@ jobs:
               }
             }
           }
-        # (Summarization pattern follows your original step style, trimmed to PR-only) [1](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/0-pr-pipeline-check.yml)
+        
 
   # ----------------------------------------------------------------
   # Job 2: Approval gate — ALWAYS runs (requires reviewers on environment)
@@ -181,8 +176,12 @@ jobs:
           echo "Approval is required to proceed to migration."
           echo "Open PRs detected: ${{ needs.readiness-check.outputs.open-pr-count }}"
           echo "Warnings present:   ${{ needs.readiness-check.outputs.has-warnings }}"
-    # (Environment approval is the GitHub-native way to prompt for human approval) [1](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/0-pr-pipeline-check.yml)
 
+      - name: Wait for manual approval
+        uses: trstringer/manual-approval@v1
+        with:
+          timeout-minutes: 4320  # up to 72 hours
+    
   # ----------------------------------------------------------------
   # Job 3: Migration — unchanged functional logic from 1-migration.yml
   # ----------------------------------------------------------------
