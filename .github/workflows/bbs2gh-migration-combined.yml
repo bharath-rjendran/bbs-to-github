@@ -18,6 +18,11 @@ on:
         default: '5'
         type: choice
         options: ['1','2','3','4','5']
+      approver:
+        description: 'migrator/approver github handler'
+        required: true
+        default: 'e.g. naik123'
+        type: string
 
 permissions:
   contents: read
@@ -173,7 +178,7 @@ jobs:
         uses: trstringer/manual-approval@v1
         with:
           secret: ${{ github.token }}
-          approvers: yashtnaik
+          approvers: ${{ inputs.approver }}
           minimum-approvals: 1
           issue-title: "Approve migration to GitHub"
           issue-body: |
