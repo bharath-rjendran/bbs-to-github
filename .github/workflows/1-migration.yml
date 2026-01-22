@@ -80,38 +80,32 @@ jobs:
           Write-Host "`nVerifying installation:" -ForegroundColor Cyan
           gh bbs2gh --version
 
+      
       - name: Validate CSV File
         shell: pwsh
         run: |
           $csvPath = "${{ inputs.csv_path }}"
+      
           if (-not (Test-Path $csvPath)) {
-            Write-Host "[ERROR] CSV file not found: $csvPath" -ForegroundColor Red
-            exit 1
+            throw "CSV file not found: $csvPath"
           }
-
+      
           $repos = Import-Csv -Path $csvPath
           if (-not $repos -or $repos.Count -eq 0) {
-            Write-Host "[ERROR] CSV is empty: $csvPath" -ForegroundColor Red
-            exit 1
+            throw "CSV is empty: $csvPath"
           }
-
-          Write-Host "[INFO] Found $($repos.Count) repositories to migrate" -ForegroundColor Green
-
-          # Required columns for BBS -> GH mapping
+      
           $requiredColumns = @('project-key','project-name','repo','github_org','github_repo','gh_repo_visibility')
           $missingColumns = $requiredColumns | Where-Object { $_ -notin $repos[0].PSObject.Properties.Name }
           if ($missingColumns) {
-            Write-Host "[ERROR] Missing required columns: $($missingColumns -join ', ')" -ForegroundColor Red
-            exit 1
+            throw "Missing required columns: $($missingColumns -join ', ')"
           }
-
-          # Validate visibility values (public|private|internal)
+      
           $badVis = $repos | Where-Object { $_.'gh_repo_visibility' -notmatch '^(public|private|internal)$' }
           if ($badVis) {
-            Write-Host "[ERROR] Invalid gh_repo_visibility values found. Use: public|private|internal" -ForegroundColor Red
-            exit 1
+            throw "Invalid gh_repo_visibility values found. Use: public|private|internal"
           }
-
+      
           Write-Host "[SUCCESS] CSV validation passed" -ForegroundColor Green
 
       - name: Run Concurrent Migration
