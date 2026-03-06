@@ -18,11 +18,11 @@ on:
         default: '5'
         type: choice
         options: ['1','2','3','4','5','6','7','8','9','10','12','15','20']
-      target_api_url:
-        description: GitHub target REST API base URL for Data Residency
-        required: false
-        default: https://api.github.com
-        type: string
+      # target_api_url:
+      #   description: GitHub target REST API base URL for Data Residency
+      #   required: false
+      #   default: https://api.github.com
+      #   type: string
       run_prechecks:
         description: Run pre-migration readiness checks
         required: false
