@@ -1,4 +1,2 @@
 project-key,project-name,repo,url,last-commit-date,repo-size-in-bytes,attachments-size-in-bytes,is-archived,pr-count,github_org,github_repo,gh_repo_visibility
-BBSMIG,bbs-migration-demo,calotracker,http://20.84.89.88:7990/projects/BBSMIG/repos/calotracker,2025-09-07 08:15 PM,3141632,0,False,0,test-19-yash,calotracker-1,private
-
-
+BBSMIG,bbs-migration-demo,calotracker,http://20.84.89.88:7990/projects/BBSMIG/repos/calotracker,2025-09-07 08:15 PM,3141632,0,False,0,kcghacnt,calotracker-2a,private
