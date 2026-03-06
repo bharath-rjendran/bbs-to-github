@@ -273,6 +273,12 @@ jobs:
           sed -i '1s/^ï»¿//' "$f"
           echo "CSV header after normalization:"
           head -n 1 "$f"
+      
+      - name: Create migration working directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${{ runner.temp }}/bbs2gh-run"
 
       - name: Run migration (1_migration.sh)
         shell: bash
