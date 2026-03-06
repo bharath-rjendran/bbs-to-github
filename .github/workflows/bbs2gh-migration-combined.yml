@@ -190,7 +190,6 @@ jobs:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       GH_PAT: ${{ secrets.GH_PAT }}
       VERBOSE: ${{ inputs.verbose && '1' || '0' }}
-      GH_CONFIG_DIR: ${{ runner.temp }}/gh-config
     steps:
       - name: Checkout
         uses: actions/checkout@v4
