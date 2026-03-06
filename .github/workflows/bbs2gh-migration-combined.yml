@@ -274,6 +274,12 @@ jobs:
           echo "CSV header after normalization:"
           head -n 1 "$f"
 
+      - name: Create working directory for migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${{ runner.temp }}/bbs2gh-run"
+
       - name: Run migration (1_migration.sh)
         shell: bash
         working-directory: ${{ runner.temp }}/bbs2gh-run
