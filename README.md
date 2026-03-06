@@ -1,176 +1,179 @@
-# Migration Strategy: bbs2gh
+# Migration Strategy: bbs2gh (Bash + GitHub Actions)
 
-The `bbs2gh` migration strategy is the **recommended approach** for migrating repositories from Bitbucket Data Center to GitHub Enterprise Cloud (GHEC), GitHub Enterprise Cloud with EMU (GHEC+EMU), or GitHub Enterprise Cloud with Data Residency (GHEC+DR) using the latest `bbs2gh` tool.
+This repository provides a **GitHub Actions-driven** migration pipeline to move repositories from **Bitbucket Server/Data Center** to **GitHub Enterprise Cloud** using the **GEI `gh-bbs2gh`** extension.
 
-> **✅ Recommended Choice**: This is the preferred migration strategy for new Bitbucket Data Center migrations, offering improved performance and direct upload capabilities.
+It uses **three Bash scripts**:
 
-> **⚠️ Beta Feature**: This migration strategy uses a beta feature of the GEI `bbs2gh` tool that allows direct uploads to GitHub Enterprise Cloud without intermediate storage. Ensure proper feature flags are enabled before use.
+- `scripts/0_prechecks.sh` – **Pre-migration readiness** (Open PRs only)
+- `scripts/1_migration.sh` – **Parallel migration runner** (supports storage auto-detection + Data Residency)
+- `scripts/2_validation.sh` – **Post-migration validation** (branches, commit counts, latest SHA)
 
-## Key Benefits
+A **single combined workflow** orchestrates all 3 stages with an **issue-based manual approval gate** between readiness and migration/validation.
 
-- **🚀 Direct Upload**: No intermediate storage required, faster transfers
-- **⚡ Better Performance**: Optimized for large-scale enterprise migrations
-- **🔄 Latest Features**: Access to newest migration capabilities and improvements
-- **🛡️ Enterprise Ready**: Full support for GitHub Enterprise Cloud features
+---
 
-## Quick Start
+## ✅ What this workflow does
 
-1. **Configure** variables and secrets (see tables below)
-2. **Enable** beta feature flags with GitHub Support
-3. **Run** Configuration Settings workflow to apply changes
-4. **Submit** migration batch using workflows.
+1. **Prechecks (optional)**
+   - Calls Bitbucket REST API and produces `bbs_pr_validation_output-<timestamp>.csv`.
+   - Flags repos with **open PRs** as a **warning** (not a hard blocker).
 
-## Configuration Requirements
+2. **Manual approval (required if migration/validation is requested)**
+   - Opens a GitHub issue and waits for a configured approver to comment **approved**.
 
-The following variables and secrets are required for the `bbs2gh` migration strategy. Manually add secrets to the repository secrets.
+3. **Migration (optional)**
+   - Runs migrations in parallel up to `max_concurrent`.
+   - Produces `repo_migration_output-<timestamp>.csv` and per-repo log files `migration-*.txt`.
+   - Supports:
+     - **GitHub-owned storage** (`--use-github-storage`) by default
+     - **AWS S3** (when AWS env vars are present)
+     - **Azure Blob** (when `AZURE_STORAGE_CONNECTION_STRING` is present)
 
-> **⚙️ Important**: Configure the secrets and variable before running the migration workflows.
+4. **Post-validation (optional)**
+   - Validates **branch count**, **commit counts**, and **latest SHAs** between Bitbucket and GitHub.
+   - Produces:
+     - `validation-log-<YYYYMMDD>.txt`
+     - `validation-summary.csv`
+     - `validation_summary_<YYYYMMDD>.md` (also copied to `validation-summary.md` by the workflow)
 
-### Required Variables
+---
 
-| Variable Name                     | Description                                                                                                         | Example                                            |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| `BITBUCKET_SERVER_URL`            | The URL of the Bitbucket Data Center instance(optional)                                                                       | `https://bitbucket.example.com`                    |
-| `BITBUCKET_SHARED_HOME`           | The shared home directory on the Bitbucket Data Center instance(optional)                                                     | `/var/atlassian/application-data/bitbucket/shared` |
+## 📌 Workflow
 
-### Required Secrets
+- **Workflow file**: `.github/workflows/bbs2gh-migration-combined.yml`
 
-| Secret Name          | Description                                                                                                         | Example                                                               |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `BBS_PASSWORD`       | The password of the Bitbucket Data Center user that will be used to authenticate with the Bitbucket Data Center API for generating Inventory | `bitbucket_pass`                                                      |
-| `SSH_PRIVATE_KEY`  | The SSH private key that will be used to download the Bitbucket Data Center archive files and will be uploaded to github(--use-github-storage)                           | `-----BEGIN PRIVATE KEY----- ABUNCHOFSTUFF -----END PRIVATE KEY-----` |
-| `GH_PAT` | Required for migration, GH Auth and for API calls during Post Validations.                                                | `GHC_XXXX`                                    |
-| `SSH_USER`              | The SSH user that will be used to download the Bitbucket Data Center archive files                                  | `bitbucket`                                        |
-| `BBS_TOKEN`              | Required for API call during Post Validations.                                  | `BBSXXXXX`                                             |
-| `BBS_USERNAME`              | The username of the Bitbucket Data Center user that will be used to authenticate with the Bitbucket Data Center API | `bitbucket_user`                                   |
+### Workflow inputs
 
-> **🔐 Security**: Store all secrets securely in repository settings. Never commit secrets to your repository.
+| Input | Required | Default | Notes |
+|------|----------|---------|------|
+| `csv_path` | ✅ | `repos.csv` | Path to your inventory/mapping CSV |
+| `bbs_base_url` | ✅ | – | Bitbucket base URL, e.g. `https://bitbucket.example.com:7990` |
+| `max_concurrent` | ❌ | `5` | Parallel migrations (script allows **1–20**) |
+| `target_api_url` | ❌ | `https://api.github.com` | **Data Residency** target API endpoint |
+| `run_prechecks` | ❌ | `true` | Run stage 0 |
+| `run_migration` | ❌ | `true` | Run stage 1 |
+| `run_post_validation` | ❌ | `true` | Run stage 2 |
+| `approver` | ✅ | – | GitHub username(s) that can approve (comma-separated) |
+| `runner_label` | ❌ | `ubuntu-latest` | Use GitHub-hosted runner or your `self-hosted` label |
 
-## Migration Workflow Steps
+---
 
-The `bbs2gh` migration strategy consists of the following workflow files executed in sequence:
+## 📄 `repos.csv` format
 
-| Step | Workflow File                 | Purpose                                                    |
-| ---- | ----------------------------- | ---------------------------------------------------------- |
-|0     | `0-bbs-inventory.yml`         | This workflow generates the Inventory report               |
-| 1    | `0-pr-pipeline-check.yml`       | Validates repos pre-migrations to check for any potential blockers(On PR, Build Pipelines, Release Pipelines etc)  |
-| 2    | `1-migration.yml`        | Executes the main repository migration using `bbs2gh` tool |
-| 3    | `2-migration-validation-bbs.yml` | Verifies migration status and validates results            |
-| 4    | `3-mannequins-validation.yml`            | Generates Mannequins report       |
-| 5    | `4-mannequins-reclaim.yml`    | Claims the mannequins(initiate the invitation)   |
+The scripts expect these columns (header names must match):
 
-### Workflow Sequence
-
-```mermaid
-flowchart TB
-    subgraph Inputs[Inputs]
-      BB[Bitbucket DC<br/>URL, Shared Home]
-      Auth[Auth & Access<br/>BBS_USERNAME/BBS_PASSWORD/BBS_TOKEN<br/>SSH_USER/SSH_PRIVATE_KEY<br/>GH_PAT]
-      Flags[GEI Beta Flags<br/>Direct Upload Enabled]
-    end
-
-    subgraph Workflows[Workflows]
-      W0[0-bbs-inventory.yml]
-      W1[0-pr-pipeline-check.yml]
-      W2[1-migration.yml]
-      W3[2-migration-validation-bbs.yml]
-      W4[3-mannequins-validation.yml]
-      W5[4-mannequins-reclaim.yml]
-    end
-
-    BB --> W0
-    Auth --> W0
-    Auth --> W1
-    Flags --> W2
-    BB --> W2
-    Auth --> W2
-
-    W0 --> W1 --> W2 --> W3 --> W4 --> W5
-
-    subgraph Outputs[Outputs]
-      Inv[Inventory Report]
-      MigRes[Migrated Repositories on GHEC/GHEC+EMU/GHEC+DR]
-      Val[Validation Results]
-      Man[Mannequins Report & Reclaimed Accounts]
-    end
-
-    W0 --> Inv
-    W2 --> MigRes
-    W3 --> Val
-    W4 --> Man
-    W5 --> Man
+```csv
+project-key,project-name,repo,url,last-commit-date,repo-size-in-bytes,attachments-size-in-bytes,is-archived,pr-count,github_org,github_repo,gh_repo_visibility
 ```
 
-> **🛠️ Customization**: Need to modify these workflows? See the **[Customizing Migrations Guide](../Customizing-Migrations.md)** for detailed instructions.
+**Minimum required columns used by scripts**:
 
-## Prerequisites
+- **Prechecks**: `project-key,repo`
+- **Migration**: `project-key,project-name,repo,github_org,github_repo,gh_repo_visibility`
+- **Validation**: `project-key,repo,url,github_org,github_repo`
 
-### System Requirements
+> Tip: Keep a single CSV containing superset columns (as above). The scripts ignore extra columns they don’t need.
 
-- **Bitbucket Data Center**: Compatible version with API access
-- **Network Access**: Connectivity between runners and Bitbucket instance
-- **SSH Access**: For archive file downloads
-- **GitHub Enterprise**: Feature flags enabled for direct upload
+---
 
-### Required Permissions
+## 🔐 Required secrets / variables
 
-- **Bitbucket**: Repository admin access for source repositories
-- **GitHub**: Organization owner or admin access for destination
-- **SSH**: Key-based authentication to Bitbucket archive storage
+### GitHub
 
-## Support and Troubleshooting
+- `GH_PAT` (**secret**) – GitHub PAT with permissions needed to create repos and run migrations.
 
-### Common Issues
+### Bitbucket
 
-- **Authentication failures**: Verify tokens and SSH keys
-- **Network connectivity**: Check firewall and routing
-- **Feature flag access**: Contact GitHub Support for beta features
-- **Archive download issues**: Validate SSH configuration
+Provide **either** PAT **or** Basic auth:
 
-> Prerequisites & Security
-```mermaid
-mindmap
-  root((bbs2gh Migration))
-    Benefits
-      Direct Upload
-      Better Performance
-      Latest Features
-      Enterprise Ready
-    Requirements
-      Variables
-        BITBUCKET_SERVER_URL (optional)
-        BITBUCKET_SHARED_HOME (optional)
-      Secrets
-        BBS_USERNAME
-        BBS_PASSWORD
-        BBS_TOKEN
-        SSH_USER
-        SSH_PRIVATE_KEY
-        GH_PAT
-    Beta Flags
-      GEI bbs2gh
-      Direct upload to GHEC
-    Security
-      Store in repo secrets
-      Never commit secrets
-```
-> Migration Workflow Pipeline
-```mermaid
-flowchart LR
-    subgraph PreChecks[Pre-Migration]
-        X0[0-bbs-inventory.yml<br/>Generate Inventory Report]
-        X1[0-pr-pipeline-check.yml<br/>Validate PRs, Build/Release Pipelines]
-    end
+- `BBS_PAT` (**secret**) – Bitbucket PAT (preferred)
 
-    subgraph Migration[Migration]
-        X2[1-migration.yml<br/>Run bbs2gh main migration]
-    end
+**OR**
 
-    subgraph Validation[Validation & Mannequins]
-        X3[2-migration-validation-bbs.yml<br/>Verify migration status]
-        X4[3-mannequins-validation.yml<br/>Generate mannequins report]
-        X5[4-mannequins-reclaim.yml<br/>Initiate invitations / reclaim]
-    end
+- `BBS_AUTH_TYPE` (**secret/variable**) – set to `Basic`
+- `BBS_USERNAME` (**secret**) – Bitbucket username
+- `BBS_PASSWORD` (**secret**) – Bitbucket password
 
-    X0 --> X1 --> X2 --> X3 --> X4 --> X5
-```
+### SSH (required by migration)
+
+- `SSH_USER` (**secret**) – SSH username to access Bitbucket archive export storage
+- `SSH_PRIVATE_KEY` (**secret**) – **unencrypted** private key (raw PEM). Do not use a passphrase-protected key.
+
+### Optional: Azure Blob storage backend
+
+If set, migration uses Azure blob storage automatically.
+
+- `AZURE_STORAGE_CONNECTION_STRING` (**secret**)
+
+### Optional: AWS S3 storage backend
+
+If set, migration uses S3 automatically.
+
+- `AWS_ACCESS_KEY_ID` (**secret**)
+- `AWS_SECRET_ACCESS_KEY` (**secret**)
+- `AWS_BUCKET_NAME` (**secret**) (or your preferred bucket env mapping)
+- `AWS_REGION` (**secret**)
+
+> ⚠️ Do not set both AWS and Azure storage variables at the same time.
+
+---
+
+## 🌍 Data Residency support
+
+For GitHub Enterprise Cloud **Data Residency**, pass the correct regional API endpoint using the workflow input:
+
+- `target_api_url`
+
+The migration script forwards this to `gh bbs2gh migrate-repo` using `--target-api-url`. It also supports the environment variable `TARGET_API_URL`.
+
+---
+
+## ▶️ How to run
+
+1. Add the required **secrets** in your repository settings.
+2. Ensure your runner (GitHub-hosted or self-hosted) can reach Bitbucket and can run `gh`, `jq`, `curl`, `python3`.
+3. Go to **Actions → bbs-to-gh-migration (combined) → Run workflow**.
+4. Fill inputs:
+   - `csv_path` (usually `repos.csv`)
+   - `bbs_base_url`
+   - `approver`
+   - optional stage toggles
+5. After prechecks complete, the workflow opens an approval issue. Comment **approved** to continue.
+
+---
+
+## 📦 Artifacts produced
+
+- **Prechecks**: `bbs-prechecks-<run_id>`
+  - `bbs_pr_validation_output-*.csv`
+
+- **Migration**: 
+  - `migration-logs-<run_id>` → `migration-*.txt`
+  - `migration-output-csv-<run_id>` → `repo_migration_output-*.csv`
+
+- **Validation**: `validation-results-<run_id>`
+  - `validation-log-*.txt`
+  - `validation-summary.csv`
+  - `validation_summary_*.md`
+  - `validation-summary.md`
+
+---
+
+## 🧰 Generating `repos.csv`
+
+If you maintain inventory scripts (for example, `inventory-report.sh` / `inventory-report.ps1`) to generate `repos.csv`, place them in the repository and run them prior to launching the workflow.
+
+---
+
+## Troubleshooting
+
+- **`gh auth status` fails in workflow**: Ensure `GH_PAT` is set and valid. The workflow logs in using `gh auth login --with-token`.
+- **SSH errors**: The migration script requires an **unencrypted** private key. Use a dedicated deploy key.
+- **Open PR warnings**: Prechecks only report open PRs as warnings; you can still proceed after approval.
+- **Validation mismatches**: Check `validation-log-*.txt` for missing branches or commit/SHA differences.
+
+---
+
+## Disclaimer
+
+The GEI `bbs2gh` direct upload capability may require feature enablement/flags in your GitHub Enterprise Cloud environment. Coordinate with GitHub Support if needed.
