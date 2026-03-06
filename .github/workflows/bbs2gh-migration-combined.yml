@@ -19,7 +19,7 @@ on:
         type: choice
         options: ['1','2','3','4','5','6','7','8','9','10','12','15','20']
       # target_api_url:
-      #   description: GitHub target REST API base URL for Data Residency
+      #   description: GitHub target REST API base URL (Data Residency). Examples: https://api.github.com or https://api.<your-tenant>.ghe.com
       #   required: false
       #   default: https://api.github.com
       #   type: string
@@ -59,7 +59,9 @@ jobs:
     name: Pre-migration Validation (Open PRs only)
     runs-on: ${{ inputs.runner_label }}
     timeout-minutes: 30
-    if: ${{ inputs.run_prechecks }}
+    outputs:
+      open_pr_repos: ${{ steps.precheck-meta.outputs.open_pr_repos }}
+      output_csv: ${{ steps.precheck-meta.outputs.output_csv }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -74,6 +76,7 @@ jobs:
           fi
 
       - name: Run prechecks (0_prechecks.sh)
+        if: ${{ inputs.run_prechecks }}
         shell: bash
         env:
           BBS_BASE_URL: ${{ inputs.bbs_base_url }}
@@ -86,59 +89,68 @@ jobs:
           chmod +x scripts/*.sh || true
           ./scripts/0_prechecks.sh -c "${{ inputs.csv_path }}"
 
-      - name: Upload prechecks output
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: bbs-prechecks-${{ github.run_id }}
-          path: bbs_pr_validation_output-*.csv
-          retention-days: 30
-          if-no-files-found: warn
-
-      - name: Prechecks Summary (repo-wise)
+      - name: Collect prechecks output + write summary
+        id: precheck-meta
         if: always()
         shell: bash
         run: |
           set -euo pipefail
+          out_csv=""
+          if [[ "${{ inputs.run_prechecks }}" == "true" ]]; then
+            out_csv=$(ls -1t bbs_pr_validation_output-*.csv 2>/dev/null | head -n 1 || true)
+          fi
 
-          out_csv="$(ls -1t bbs_pr_validation_output-*.csv 2>/dev/null | head -n 1 || true)"
+          if [[ -n "$out_csv" && -f "$out_csv" ]]; then
+            open_pr_repos=$(awk -F',' 'NR>1 && $5 ~ /^[0-9]+$/ && $5+0 > 0 {c++} END{print c+0}' "$out_csv")
+          else
+            open_pr_repos=0
+          fi
+
+          echo "open_pr_repos=$open_pr_repos" >> "$GITHUB_OUTPUT"
+          echo "output_csv=$out_csv" >> "$GITHUB_OUTPUT"
 
           {
             echo "# 🔎 Pre-migration Summary (Open PRs)"
             echo ""
             echo "- **CSV input**: \`${{ inputs.csv_path }}\`"
             echo "- **Bitbucket Base URL**: \`${{ inputs.bbs_base_url }}\`"
+            echo "- **Prechecks enabled**: \`${{ inputs.run_prechecks }}\`"
             echo ""
 
             if [[ -z "$out_csv" || ! -f "$out_csv" ]]; then
-              echo "⚠️ No prechecks output CSV found: \`bbs_pr_validation_output-*.csv\`"
-              exit 0
+              echo "⚠️ No prechecks output CSV found (bbs_pr_validation_output-*.csv)."
+            else
+              total=$(awk -F',' 'NR>1 {c++} END{print c+0}' "$out_csv")
+              warn=$open_pr_repos
+              ready=$(( total - warn ))
+
+              echo "## Overall"
+              echo ""
+              echo "- **Total repos**: $total"
+              echo "- **Repos with open PRs (warning)**: ⚠️ $warn"
+              echo "- **Repos with 0 open PRs (ready)**: ✅ $ready"
+              echo ""
+              echo "## Repo-wise Details"
+              echo ""
+              echo "| Project Key | Repo | Open PRs | Ready |"
+              echo "|---|---|---:|---|"
+              awk -F',' 'NR>1 {
+                pk=$1; repo=$3; prs=$5; ready=$7;
+                gsub(/\r/,"",ready);
+                mark=(ready=="true"?"✅":"⚠️");
+                printf("| `%s` | `%s` | %s | %s |\n", pk, repo, prs, mark);
+              }' "$out_csv"
             fi
-
-            total="$(awk -F',' 'NR>1 {c++} END{print c+0}' "$out_csv")"
-            warn="$(awk -F',' 'NR>1 && $5 ~ /^[0-9]+$/ && $5+0 > 0 {c++} END{print c+0}' "$out_csv")"
-            ready="$(( total - warn ))"
-
-            echo "## Overall"
-            echo ""
-            echo "- **Total repos**: $total"
-            echo "- **Repos with open PRs (warning)**: ⚠️ $warn"
-            echo "- **Repos with 0 open PRs (ready)**: ✅ $ready"
-            echo ""
-            echo "## Repo-wise Details"
-            echo ""
-            echo "| Project Key | Repo | Open PRs | Ready |"
-            echo "|---|---|---:|---|"
-
-            # CSV columns (from 0_prechecks.sh):
-            # project_key,project_name,repo_slug,is_archived,open_pr_count,warnings,ready_to_migrate
-            awk -F',' 'NR>1 {
-              pk=$1; repo=$3; prs=$5; ready=$7;
-              gsub(/\r/,"",ready);
-              mark=(ready=="true"?"✅":"⚠️");
-              printf("| `%s` | `%s` | %s | %s |\n", pk, repo, prs, mark);
-            }' "$out_csv"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload prechecks output
+        if: ${{ always() && inputs.run_prechecks }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bbs-prechecks-${{ github.run_id }}
+          path: bbs_pr_validation_output-*.csv
+          retention-days: 30
+          if-no-files-found: warn
 
   approval:
     name: Manual Approval
@@ -158,6 +170,8 @@ jobs:
 
             - CSV: `${{ inputs.csv_path }}`
             - Bitbucket Base URL: `${{ inputs.bbs_base_url }}`
+            - Target API URL: `${{ inputs.target_api_url }}`
+            - Open PR repos (warning): `${{ needs.prechecks.outputs.open_pr_repos }}`
           exclude-workflow-initiator-as-approver: false
           fail-on-denial: true
           polling-interval-seconds: 30
@@ -169,25 +183,38 @@ jobs:
     needs: [approval]
     if: ${{ inputs.run_migration }}
     env:
-      # IMPORTANT: GH CLI uses GH_TOKEN automatically and does not require interactive login.
       GH_TOKEN: ${{ secrets.GH_PAT }}
       GH_PAT: ${{ secrets.GH_PAT }}
+      TARGET_API_URL: ${{ inputs.target_api_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Derive GH_HOST from TARGET_API_URL (Data Residency safe)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Derive GH_HOST from the target API URL.
+          # Examples:
+          #   https://api.github.com          -> github.com
+          #   https://api.<tenant>.ghe.com    -> <tenant>.ghe.com
+          host=$(echo "${TARGET_API_URL}" | sed -E 's#^https?://##; s#/.*$##')
+          gh_host="${host#api.}"
+          echo "GH_HOST=$gh_host" >> "$GITHUB_ENV"
+          echo "Resolved GH_HOST=$gh_host"
 
       - name: Verify GitHub CLI auth (non-interactive)
         shell: bash
         run: |
           set -euo pipefail
           if [[ -z "${GH_TOKEN:-}" ]]; then
-            echo "::error::GH_PAT secret is missing or not available to this workflow run." 
+            echo "::error::GH_PAT secret is missing or not available to this workflow run."
             exit 1
           fi
           gh --version
-          gh auth status --hostname github.com
+          gh auth status --hostname "${GH_HOST}"
 
-      - name: Install jq
+      - name: Install dependencies (jq)
         shell: bash
         run: |
           set -euo pipefail
@@ -196,23 +223,36 @@ jobs:
             sudo apt-get install -y jq
           fi
 
-      - name: Install gh-bbs2gh extension
+      - name: Install gh-bbs2gh extension (host-agnostic)
         shell: bash
         run: |
           set -euo pipefail
-          if ! gh extension list | awk '{print $1}' | grep -qx 'github/gh-bbs2gh'; then
-            gh extension install github/gh-bbs2gh
+          # Use full URL so install works even when GH_HOST is a non-github.com host.
+          if gh extension list | awk '{print $1}' | grep -qx 'gh-bbs2gh'; then
+            gh extension upgrade gh-bbs2gh
+          else
+            gh extension install https://github.com/github/gh-bbs2gh
           fi
           gh bbs2gh --version
+
+      - name: Normalize CSV header (remove spaces/CRLF/BOM)
+        shell: bash
+        run: |
+          set -euo pipefail
+          f="${{ inputs.csv_path }}"
+          [[ -f "$f" ]] || { echo "::error::CSV not found: $f"; exit 1; }
+          sed -i 's/\r$//' "$f"
+          sed -i 's/, */,/g' "$f"
+          sed -i '1s/^\xEF\xBB\xBF//' "$f"
+          echo "CSV header after normalization:"
+          head -n 1 "$f"
 
       - name: Pre-validate CSV header for migration script
         shell: bash
         run: |
           set -euo pipefail
           f="${{ inputs.csv_path }}"
-          [[ -f "$f" ]] || { echo "::error::CSV not found: $f"; exit 1; }
           header=$(head -n1 "$f" | tr -d '\r')
-          echo "CSV header: $header"
           required=("project-key" "project-name" "repo" "github_org" "github_repo" "gh_repo_visibility")
           missing=()
           for c in "${required[@]}"; do
@@ -232,6 +272,7 @@ jobs:
           BBS_PASSWORD: ${{ secrets.BBS_PASSWORD }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          # Keep TARGET_API_URL consistent for your script
           TARGET_API_URL: ${{ inputs.target_api_url }}
           AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -241,7 +282,10 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x scripts/*.sh || true
-          ./scripts/1_migration.sh --csv "${{ inputs.csv_path }}" --max-concurrent "${{ inputs.max_concurrent }}" --target-api-url "${{ inputs.target_api_url }}"
+          ./scripts/1_migration.sh \
+            --csv "${{ inputs.csv_path }}" \
+            --max-concurrent "${{ inputs.max_concurrent }}" \
+            --target-api-url "${{ inputs.target_api_url }}"
 
       - name: Upload migration outputs
         if: always()
@@ -259,56 +303,46 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          out_csv="$(ls -1t repo_migration_output-*.csv 2>/dev/null | head -n 1 || true)"
-
+          out_csv=$(ls -1t repo_migration_output-*.csv 2>/dev/null | head -n 1 || true)
           {
             echo "# 🚀 Migration Summary"
             echo ""
             echo "- **CSV input**: \`${{ inputs.csv_path }}\`"
             echo "- **Max concurrent**: \`${{ inputs.max_concurrent }}\`"
             echo "- **Target API URL**: \`${{ inputs.target_api_url }}\`"
+            echo "- **GH host (derived)**: \`${GH_HOST}\`"
             echo ""
-
             if [[ -z "$out_csv" || ! -f "$out_csv" ]]; then
-              echo "⚠️ No migration output CSV found: \`repo_migration_output-*.csv\`"
-              exit 0
+              echo "⚠️ No migration output CSV found (repo_migration_output-*.csv)."
+            else
+              total=$(awk -F',' 'NR>1{c++} END{print c+0}' "$out_csv")
+              succ=$(awk -F',' 'NR>1 && $7 ~ /Success/{c++} END{print c+0}' "$out_csv")
+              fail=$(awk -F',' 'NR>1 && $7 ~ /Failure/{c++} END{print c+0}' "$out_csv")
+              pend=$(awk -F',' 'NR>1 && $7 ~ /Pending|In Progress/{c++} END{print c+0}' "$out_csv")
+              echo "## Overall"
+              echo ""
+              echo "- **Total**: $total"
+              echo "- **Success**: ✅ $succ"
+              echo "- **Failure**: ❌ $fail"
+              echo "- **Pending/In Progress**: ⏳ $pend"
+              echo ""
+              echo "## Repo-wise Status"
+              echo ""
+              echo "| GitHub Repo | BBS Repo | Status | Log |"
+              echo "|---|---|---|---|"
+              awk -F',' 'NR>1 {
+                for(i=1;i<=NF;i++){ gsub(/"/,"",$i) }
+                bbs=$1 "/" $3
+                gh=$4 "/" $5
+                st=$7
+                lg=$8
+                mark="⏳"
+                if (st=="Success") mark="✅"
+                else if (st=="Failure") mark="❌"
+                logcell=(lg!="" ? "`" lg "`" : "")
+                printf("| %s | %s | %s %s | %s |\n", gh, bbs, mark, st, logcell)
+              }' "$out_csv"
             fi
-
-            total="$(awk -F',' 'NR>1 {c++} END{print c+0}' "$out_csv")"
-            succ="$(awk -F',' 'NR>1 && $7 ~ /Success/ {c++} END{print c+0}' "$out_csv")"
-            fail="$(awk -F',' 'NR>1 && $7 ~ /Failure/ {c++} END{print c+0}' "$out_csv")"
-            pend="$(awk -F',' 'NR>1 && $7 ~ /Pending|In Progress/ {c++} END{print c+0}' "$out_csv")"
-
-            echo "## Overall"
-            echo ""
-            echo "- **Total**: $total"
-            echo "- **Success**: ✅ $succ"
-            echo "- **Failure**: ❌ $fail"
-            echo "- **Pending/In Progress**: ⏳ $pend"
-            echo ""
-            echo "## Repo-wise Status"
-            echo ""
-            echo "| GitHub Repo | BBS Repo | Status | Log |"
-            echo "|---|---|---|---|"
-
-            # CSV columns (from 1_migration.sh):
-            # project-key,project-name,repo,github_org,github_repo,gh_repo_visibility,Migration_Status,Log_File
-            awk -F',' 'NR>1 {
-              # remove double quotes if present
-              for(i=1;i<=NF;i++){ gsub(/"/,"",$i) }
-              bbs=$1 "/" $3
-              gh=$4 "/" $5
-              st=$7
-              lg=$8
-
-              mark="⏳"
-              if (st=="Success") mark="✅"
-              else if (st=="Failure") mark="❌"
-
-              logcell = (lg!="" ? "`" lg "`" : "")
-              printf("| %s | %s | %s %s | %s |\n", gh, bbs, mark, st, logcell)
-            }' "$out_csv"
           } >> "$GITHUB_STEP_SUMMARY"
 
   validate:
@@ -320,20 +354,30 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       GH_PAT: ${{ secrets.GH_PAT }}
+      TARGET_API_URL: ${{ inputs.target_api_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Derive GH_HOST from TARGET_API_URL (Data Residency safe)
+        shell: bash
+        run: |
+          set -euo pipefail
+          host=$(echo "${TARGET_API_URL}" | sed -E 's#^https?://##; s#/.*$##')
+          gh_host="${host#api.}"
+          echo "GH_HOST=$gh_host" >> "$GITHUB_ENV"
+          echo "Resolved GH_HOST=$gh_host"
 
       - name: Verify GitHub CLI auth (non-interactive)
         shell: bash
         run: |
           set -euo pipefail
           if [[ -z "${GH_TOKEN:-}" ]]; then
-            echo "::error::GH_PAT secret is missing or not available to this workflow run." 
+            echo "::error::GH_PAT secret is missing or not available to this workflow run."
             exit 1
           fi
           gh --version
-          gh auth status --hostname github.com
+          gh auth status --hostname "${GH_HOST}"
 
       - name: Install dependencies (jq, python3)
         shell: bash
@@ -355,6 +399,12 @@ jobs:
           chmod +x scripts/*.sh || true
           ./scripts/2_validation.sh -c "${{ inputs.csv_path }}" -b "${{ inputs.bbs_base_url }}"
 
+          # Copy newest markdown summary to a stable name for convenience
+          latest_md=$(ls -1t validation_summary_*.md 2>/dev/null | head -n 1 || true)
+          if [[ -n "$latest_md" ]]; then
+            cp -f "$latest_md" validation-summary.md
+          fi
+
       - name: Upload validation outputs
         if: always()
         uses: actions/upload-artifact@v4
@@ -364,6 +414,7 @@ jobs:
             validation-log-*.txt
             validation-summary.csv
             validation_summary_*.md
+            validation-summary.md
           retention-days: 30
           if-no-files-found: warn
 
@@ -372,22 +423,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          md="$(ls -1t validation_summary_*.md 2>/dev/null | head -n 1 || true)"
-
+          md=$(ls -1t validation-summary.md validation_summary_*.md 2>/dev/null | head -n 1 || true)
           {
             echo "# ✅ Post-migration Validation Summary"
             echo ""
             echo "- **CSV input**: \`${{ inputs.csv_path }}\`"
             echo "- **Bitbucket Base URL**: \`${{ inputs.bbs_base_url }}\`"
+            echo "- **Target API URL**: \`${{ inputs.target_api_url }}\`"
+            echo "- **GH host (derived)**: \`${GH_HOST}\`"
             echo ""
-
             if [[ -z "$md" || ! -f "$md" ]]; then
-              echo "⚠️ No validation markdown found: \`validation_summary_*.md\`"
-              exit 0
+              echo "⚠️ No validation markdown summary found (validation_summary_*.md)."
+            else
+              cat "$md"
             fi
-
-            echo "## Repo-wise Results (branches / commits / SHA)"
-            echo ""
-            cat "$md"
           } >> "$GITHUB_STEP_SUMMARY"
