@@ -230,12 +230,12 @@ jobs:
           echo "Resolved TARGET_API_URL=${TARGET_API_URL}"
           echo "Resolved GH_HOST=${GH_HOST}"
 
-      - name: Verify GitHub CLI auth (non-interactive)
-        shell: bash
-        run: |
-          set -euo pipefail
-          gh --version
-          gh auth status --hostname "${GH_HOST}"
+      # - name: Verify GitHub CLI auth (non-interactive)
+      #   shell: bash
+      #   run: |
+      #     set -euo pipefail
+      #     gh --version
+      #     gh auth status --hostname "${GH_HOST}"
 
       - name: Install dependencies (jq)
         shell: bash
