@@ -18,11 +18,11 @@ on:
         default: '5'
         type: choice
         options: ['1','2','3','4','5','6','7','8','9','10','12','15','20']
-      # target_api_url:
-      #   description: GitHub target REST API base URL (DR). Leave empty to use repo variable TARGET_API_URL. Examples: https://api.github.com or https://api.<tenant>.ghe.com
-      #   required: false
-      #   default: ''
-      #   type: string
+      target_api_url:
+        description: GitHub target REST API base URL (DR). Leave empty to use repo variable TARGET_API_URL. Examples: https://api.github.com or https://api.<tenant>.ghe.com
+        required: false
+        default: ''
+        type: string
       verbose:
         description: Enable verbose logging (sets VERBOSE=1 and uploads *.log artifacts if produced)
         required: false
@@ -139,9 +139,11 @@ jobs:
               echo "|---|---|---:|---|"
               awk -F',' 'NR>1 {
                 pk=$1; repo=$3; prs=$5; ready=$7;
-                gsub(/\r/,"",ready);
+                gsub(/
+/,"",ready);
                 mark=(ready=="true"?"✅":"⚠️");
-                printf("| `%s` | `%s` | %s | %s |\n", pk, repo, prs, mark);
+                printf("| `%s` | `%s` | %s | %s |
+", pk, repo, prs, mark);
               }' "$out_csv"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
@@ -246,14 +248,15 @@ jobs:
       - name: Install gh-bbs2gh extension (DR-safe)
         shell: bash
         env:
+          # IMPORTANT:
           # We are authenticated to a DR host via GH_HOST/GH_TOKEN in the job.
           # The extension lives on github.com. If GH_TOKEN is a DR token, gh may send it to api.github.com
-          # and get HTTP 401. To avoid that, unset GH_TOKEN for this step and use anonymous access.
+          # during release checks and get HTTP 401. To avoid that, unset GH_TOKEN for this step and use
+          # anonymous access to github.com.
           GH_TOKEN: ''
           GH_HOST: github.com
         run: |
           set -euo pipefail
-          # Use full URL so install works regardless of the active GH_HOST.
           if gh extension list | awk '{print $1}' | grep -qx 'gh-bbs2gh'; then
             gh extension upgrade gh-bbs2gh
           else
@@ -265,16 +268,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          f="${{ inputs.csv_path }}"
+          f="$GITHUB_WORKSPACE/${{ inputs.csv_path }}"
           [[ -f "$f" ]] || { echo "::error::CSV not found: $f"; exit 1; }
-          sed -i 's/\r$//' "$f"
+          sed -i 's/$//' "$f"
           sed -i 's/, */,/g' "$f"
-          sed -i '1s/^\xEF\xBB\xBF//' "$f"
+          sed -i '1s/^ï»¿//' "$f"
           echo "CSV header after normalization:"
           head -n 1 "$f"
 
       - name: Run migration (1_migration.sh)
         shell: bash
+        working-directory: ${{ runner.temp }}/bbs2gh-run
         env:
           BBS_BASE_URL: ${{ inputs.bbs_base_url }}
           BBS_USERNAME: ${{ secrets.BBS_USERNAME }}
@@ -289,18 +293,17 @@ jobs:
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
           set -euo pipefail
-          chmod +x scripts/*.sh || true
-          ./scripts/1_migration.sh \
-            --csv "${{ inputs.csv_path }}" \
-            --max-concurrent "${{ inputs.max_concurrent }}" \
-            --target-api-url "${TARGET_API_URL}"
+          mkdir -p "${{ runner.temp }}/bbs2gh-run"
+          chmod +x "$GITHUB_WORKSPACE"/scripts/*.sh || true
+          # Run OUTSIDE the checked-out git repo so gh does NOT infer github.com from the repo remote.
+          "$GITHUB_WORKSPACE"/scripts/1_migration.sh             --csv "$GITHUB_WORKSPACE/${{ inputs.csv_path }}"             --max-concurrent "${{ inputs.max_concurrent }}"             --target-api-url "${TARGET_API_URL}"
 
       - name: Upload migration logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: migration-logs-${{ github.run_id }}
-          path: migration-*.txt
+          path: ${{ runner.temp }}/bbs2gh-run/migration-*.txt
           retention-days: 90
           if-no-files-found: warn
 
@@ -309,7 +312,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: migration-output-csv-${{ github.run_id }}
-          path: repo_migration_output-*.csv
+          path: ${{ runner.temp }}/bbs2gh-run/repo_migration_output-*.csv
           retention-days: 90
           if-no-files-found: warn
 
@@ -319,9 +322,9 @@ jobs:
         with:
           name: verbose-logs-${{ github.run_id }}
           path: |
-            *.log
-            */*.log
-            logs/*/*.log
+            ${{ runner.temp }}/bbs2gh-run/*.log
+            ${{ runner.temp }}/bbs2gh-run/*/*.log
+            ${{ runner.temp }}/bbs2gh-run/logs/*/*.log
           retention-days: 90
           if-no-files-found: warn
 
@@ -330,7 +333,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          out_csv=$(ls -1t repo_migration_output-*.csv 2>/dev/null | head -n 1 || true)
+          out_csv=$(ls -1t "${{ runner.temp }}/bbs2gh-run"/repo_migration_output-*.csv 2>/dev/null | head -n 1 || true)
           {
             echo "# 🚀 Migration Summary"
             echo ""
@@ -374,7 +377,7 @@ jobs:
                 if (st=="Success") mark="✅"
                 else if (st=="Failure") mark="❌"
                 logcell=(lg!="" ? "`" lg "`" : "")
-                printf("| %s | %s | %s %s | %s |\n", gh, bbs, mark, st, logcell)
+                printf("| %s | %s | %s %s | %s |", gh, bbs, mark, st, logcell)
               }' "$out_csv"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
@@ -433,6 +436,7 @@ jobs:
 
       - name: Run validation (2_validation.sh)
         shell: bash
+        working-directory: ${{ runner.temp }}/bbs2gh-validate
         env:
           BBS_BASE_URL: ${{ inputs.bbs_base_url }}
           BBS_PAT: ${{ secrets.BBS_PAT }}
@@ -441,8 +445,10 @@ jobs:
           BBS_PASSWORD: ${{ secrets.BBS_PASSWORD }}
         run: |
           set -euo pipefail
-          chmod +x scripts/*.sh || true
-          ./scripts/2_validation.sh -c "${{ inputs.csv_path }}" -b "${{ inputs.bbs_base_url }}"
+          mkdir -p "${{ runner.temp }}/bbs2gh-validate"
+          chmod +x "$GITHUB_WORKSPACE"/scripts/*.sh || true
+          # Run OUTSIDE the checked-out git repo so gh does NOT infer github.com from the repo remote.
+          "$GITHUB_WORKSPACE"/scripts/2_validation.sh             -c "$GITHUB_WORKSPACE/${{ inputs.csv_path }}"             -b "${{ inputs.bbs_base_url }}"
 
           latest_md=$(ls -1t validation_summary_*.md 2>/dev/null | head -n 1 || true)
           if [[ -n "$latest_md" ]]; then
@@ -455,10 +461,10 @@ jobs:
         with:
           name: validation-results-${{ github.run_id }}
           path: |
-            validation-log-*.txt
-            validation-summary.csv
-            validation_summary_*.md
-            validation-summary.md
+            ${{ runner.temp }}/bbs2gh-validate/validation-log-*.txt
+            ${{ runner.temp }}/bbs2gh-validate/validation-summary.csv
+            ${{ runner.temp }}/bbs2gh-validate/validation_summary_*.md
+            ${{ runner.temp }}/bbs2gh-validate/validation-summary.md
           retention-days: 30
           if-no-files-found: warn
 
@@ -467,7 +473,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          md=$(ls -1t validation-summary.md validation_summary_*.md 2>/dev/null | head -n 1 || true)
+          md=$(ls -1t "${{ runner.temp }}/bbs2gh-validate"/validation-summary.md "${{ runner.temp }}/bbs2gh-validate"/validation_summary_*.md 2>/dev/null | head -n 1 || true)
           {
             echo "# ✅ Post-migration Validation Summary"
             echo ""
