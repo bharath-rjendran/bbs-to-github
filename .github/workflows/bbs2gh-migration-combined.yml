@@ -44,7 +44,7 @@ on:
         default: true
         type: boolean
       runner_label:
-        description: "Runner to execute jobs on. Use 'ubuntu-latest' for GitHub-hosted runners or 'self-hosted' for your local self-hosted runner."
+        description: "Run the job on GitHub-hosted or self-hosted runners."
         required: false
         default: ubuntu-latest
         type: choice
