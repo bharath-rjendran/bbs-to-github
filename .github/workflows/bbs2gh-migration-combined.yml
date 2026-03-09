@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       bbs_base_url:
-        description: Bitbucket Server/Data Center base URL (e.g., https://bitbucket.example.com:7990)
+        description: "Bitbucket Server base URL. https://bitbucket.example.com:7990"
         required: true
         type: string
       max_concurrent:
