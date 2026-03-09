@@ -4,8 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       bbs_base_url:
-        description: "Bitbucket Server base URL. (https://bitbucket.example.com:7990)"
-        required: true
+        description: "Bitbucket Server base URL. Leave blank to use the BBS_BASE_URL repo variable. (https://bitbucket.example.com:7990)"
+        required: false
+        default: ''
         type: string
       max_concurrent:
         description: Maximum concurrent migrations (1-20)
@@ -58,6 +59,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Resolve BBS_BASE_URL (input -> repo var)
+        shell: bash
+        env:
+          INPUT_BBS_BASE_URL: ${{ inputs.bbs_base_url }}
+          VAR_BBS_BASE_URL: ${{ vars.BBS_BASE_URL }}
+        run: |
+          set -euo pipefail
+          BBS_BASE_URL="${INPUT_BBS_BASE_URL:-}"
+          if [[ -z "$BBS_BASE_URL" ]]; then
+            BBS_BASE_URL="${VAR_BBS_BASE_URL:-}"
+          fi
+          if [[ -z "$BBS_BASE_URL" ]]; then
+            echo "::error::BBS_BASE_URL is not set. Provide it as a workflow input or set it as a repo variable (Settings → Variables → Actions)."
+            exit 1
+          fi
+          echo "BBS_BASE_URL=${BBS_BASE_URL}" >> "$GITHUB_ENV"
+          echo "Resolved BBS_BASE_URL=${BBS_BASE_URL}"
+
       - name: Install jq
         shell: bash
         run: |
@@ -70,7 +89,7 @@ jobs:
       - name: Run prechecks (0_prechecks.sh)
         shell: bash
         env:
-          BBS_BASE_URL: ${{ inputs.bbs_base_url }}
+          BBS_BASE_URL: ${{ env.BBS_BASE_URL }}
           BBS_PAT: ${{ secrets.BBS_PAT }}
           BBS_AUTH_TYPE: ${{ secrets.BBS_AUTH_TYPE }}
           BBS_USERNAME: ${{ secrets.BBS_USERNAME }}
@@ -100,7 +119,7 @@ jobs:
             echo "# 🔎 Pre-migration Summary (Open PRs)"
             echo
             echo "- **CSV input**: \`repos.csv\`"
-            echo "- **Bitbucket Base URL**: \`${{ inputs.bbs_base_url }}\`"
+            echo "- **Bitbucket Base URL**: \`${BBS_BASE_URL}\`"
             echo
 
             if [[ -z "$out_csv" || ! -f "$out_csv" ]]; then
@@ -166,6 +185,8 @@ jobs:
         env:
           INPUT_TARGET_API_URL: ${{ inputs.target_api_url }}
           VAR_TARGET_API_URL: ${{ vars.TARGET_API_URL }}
+          INPUT_BBS_BASE_URL: ${{ inputs.bbs_base_url }}
+          VAR_BBS_BASE_URL: ${{ vars.BBS_BASE_URL }}
         run: |
           set -euo pipefail
 
@@ -185,6 +206,17 @@ jobs:
 
           echo "Resolved TARGET_API_URL=${TARGET_API_URL}"
           echo "Resolved GH_HOST=${GH_HOST}"
+
+          BBS_BASE_URL="${INPUT_BBS_BASE_URL:-}"
+          if [[ -z "$BBS_BASE_URL" ]]; then
+            BBS_BASE_URL="${VAR_BBS_BASE_URL:-}"
+          fi
+          if [[ -z "$BBS_BASE_URL" ]]; then
+            echo "::error::BBS_BASE_URL is not set. Provide it as a workflow input or set it as a repo variable (Settings → Variables → Actions)."
+            exit 1
+          fi
+          echo "BBS_BASE_URL=${BBS_BASE_URL}" >> "$GITHUB_ENV"
+          echo "Resolved BBS_BASE_URL=${BBS_BASE_URL}"
 
       - name: Verify GitHub CLI auth (non-interactive)
         shell: bash
@@ -261,7 +293,7 @@ jobs:
         env:
           # CRITICAL: don’t use env-token auth during the script; use the stored token in GH_CONFIG_DIR
           GH_TOKEN: ''
-          BBS_BASE_URL: ${{ inputs.bbs_base_url }}
+          BBS_BASE_URL: ${{ env.BBS_BASE_URL }}
           BBS_USERNAME: ${{ secrets.BBS_USERNAME }}
           BBS_PASSWORD: ${{ secrets.BBS_PASSWORD }}
           SSH_USER: ${{ secrets.SSH_USER }}
@@ -361,6 +393,8 @@ jobs:
         env:
           INPUT_TARGET_API_URL: ${{ inputs.target_api_url }}
           VAR_TARGET_API_URL: ${{ vars.TARGET_API_URL }}
+          INPUT_BBS_BASE_URL: ${{ inputs.bbs_base_url }}
+          VAR_BBS_BASE_URL: ${{ vars.BBS_BASE_URL }}
         run: |
           set -euo pipefail
           TARGET_API_URL="${INPUT_TARGET_API_URL:-}"
@@ -374,6 +408,17 @@ jobs:
           GH_HOST="${host#api.}"
           echo "TARGET_API_URL=${TARGET_API_URL}" >> "$GITHUB_ENV"
           echo "GH_HOST=${GH_HOST}" >> "$GITHUB_ENV"
+
+          BBS_BASE_URL="${INPUT_BBS_BASE_URL:-}"
+          if [[ -z "$BBS_BASE_URL" ]]; then
+            BBS_BASE_URL="${VAR_BBS_BASE_URL:-}"
+          fi
+          if [[ -z "$BBS_BASE_URL" ]]; then
+            echo "::error::BBS_BASE_URL is not set. Provide it as a workflow input or set it as a repo variable (Settings → Variables → Actions)."
+            exit 1
+          fi
+          echo "BBS_BASE_URL=${BBS_BASE_URL}" >> "$GITHUB_ENV"
+          echo "Resolved BBS_BASE_URL=${BBS_BASE_URL}"
 
       - name: Install dependencies (jq, python3)
         shell: bash
@@ -408,7 +453,7 @@ jobs:
         env:
           GH_TOKEN: ''
 
-          BBS_BASE_URL: ${{ inputs.bbs_base_url }}
+          BBS_BASE_URL: ${{ env.BBS_BASE_URL }}
           BBS_PAT: ${{ secrets.BBS_PAT }}
           BBS_AUTH_TYPE: ${{ secrets.BBS_AUTH_TYPE }}
           BBS_USERNAME: ${{ secrets.BBS_USERNAME }}
@@ -420,7 +465,7 @@ jobs:
 
           "$GITHUB_WORKSPACE"/scripts/2_validation.sh \
             -c "$GITHUB_WORKSPACE/repos.csv" \
-            -b "${{ inputs.bbs_base_url }}"
+            -b "${BBS_BASE_URL}"
 
       - name: Write validation step summary
         if: always()
