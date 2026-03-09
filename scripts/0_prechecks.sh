@@ -11,8 +11,6 @@ CSV_PATH="repos.csv"
 OUTPUT_PATH=""
 PROJECT_KEYS_CSV=""
 
-sed -i 's/"//g' $CSV_PATH
-
 while getopts ":c:o:p:" opt; do
   case "$opt" in
     c) CSV_PATH="$OPTARG" ;;
@@ -21,6 +19,9 @@ while getopts ":c:o:p:" opt; do
     *) echo "Usage: $0 [-c repos.csv] [-o output.csv] [-p KEY1,KEY2]" >&2; exit 1 ;;
   esac
 done
+
+# Strip stray quotes from the resolved CSV (must come after getopts)
+sed -i 's/"//g' "$CSV_PATH"
 
 if [[ -z "${BBS_BASE_URL:-}" ]]; then
   echo "[ERROR] BBS_BASE_URL env var is required." >&2
@@ -53,15 +54,22 @@ curl -f -sS -H "$(auth_header)" "${BASE_URL}/rest/api/1.0/projects?limit=1" >/de
 timestamp="$(date +'%Y%m%d-%H%M%S')"
 OUTPUT_CSV="${OUTPUT_PATH:-bbs_pr_validation_output-${timestamp}.csv}"
 
+# Ensure temp files are cleaned up on any exit
+rows_tmp=""
+ready_tmp=""
+results_tmp=""
+trap 'rm -f "${rows_tmp:-}" "${ready_tmp:-}" "${results_tmp:-}"' EXIT
+
 IFS=',' read -r -a PROJECT_KEYS <<< "${PROJECT_KEYS_CSV:-}"
 
 discover_projects() {
-  local start=0 vals isLast nextStart
+  local start=0 isLast nextStart
   local results=()
   while :; do
-    resp="$(curl_json "${BASE_URL}/rest/api/1.0/projects?limit=100&start=${start}")"
-    vals="$(echo "$resp" | jq -r '.values[]?.key')"
-    [[ -n "$vals" ]] && results+=($(echo "$vals"))
+    local resp; resp="$(curl_json "${BASE_URL}/rest/api/1.0/projects?limit=100&start=${start}")"
+    local chunk=()
+    mapfile -t chunk < <(echo "$resp" | jq -r '.values[]?.key')
+    [[ ${#chunk[@]} -gt 0 ]] && results+=("${chunk[@]}")
     isLast="$(echo "$resp" | jq -r '.isLastPage')"
     nextStart="$(echo "$resp" | jq -r '.nextPageStart // empty')"
     [[ "$isLast" == "true" ]] && break
@@ -90,18 +98,10 @@ discover_repos_for_project() {
 
 get_open_pr_count() {
   local projectKey="$1" repoSlug="$2"
-  local start=0 total=0
-  while :; do
-    resp="$(curl_json "${BASE_URL}/rest/api/1.0/projects/${projectKey}/repos/${repoSlug}/pull-requests?state=OPEN&limit=100&start=${start}")" || break
-    cnt="$(echo "$resp" | jq '.values | length')"
-    total=$(( total + cnt ))
-    isLast="$(echo "$resp" | jq -r '.isLastPage')"
-    nextStart="$(echo "$resp" | jq -r '.nextPageStart // empty')"
-    [[ "$isLast" == "true" ]] && break
-    [[ -z "$nextStart" ]] && break
-    start="$nextStart"
-  done
-  echo "$total"
+  # Use limit=1 and read the top-level .size — a single call gives the full count
+  local resp
+  resp="$(curl_json "${BASE_URL}/rest/api/1.0/projects/${projectKey}/repos/${repoSlug}/pull-requests?state=OPEN&limit=1")" || { echo 0; return; }
+  echo "$resp" | jq '.size // 0'
 }
 
 echo ""
@@ -122,7 +122,7 @@ fi
 
 if [[ ! -s "$rows_tmp" ]]; then
   echo "[INFO] Auto-discovering projects & repos..."
-  projects=($(discover_projects))
+  mapfile -t projects < <(discover_projects)
   for pk in "${projects[@]}"; do
     if [[ "${#PROJECT_KEYS[@]}" -gt 0 ]]; then
       match=false
@@ -170,7 +170,6 @@ else
 fi
 
 total_repos="$(($(wc -l < "$rows_tmp")))"
-repos_with_warnings="$(awk -F',' 'NR>1 && $6!="" {c++} END{print c+0}' "$OUTPUT_CSV")"
 
 echo ""
 echo "[SUMMARY] Total repos: $total_repos"

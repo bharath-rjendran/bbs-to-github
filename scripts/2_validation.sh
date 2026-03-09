@@ -41,7 +41,7 @@ if [[ -z "$BBS_BASE_URL" ]]; then
 fi
 BASE_URL="${BBS_BASE_URL%/}"
 
-LOG_FILE="validation-log-$(date +'%Y%m%d').txt"
+LOG_FILE="validation-log-$(date +'%Y%m%d-%H%M%S').txt"
 
 # ---- Bitbucket auth header ----------------------------------------------------
 auth_header() {
@@ -84,6 +84,9 @@ PY
 
 get_bbs_commits_info() {
   local projectKey="$1" repoSlug="$2" branch="$3"
+  # If called with a 4th arg (known GH SHA), fetch only the first page to get the
+  # latest BBS SHA and short-circuit the full count pagination when SHAs match.
+  local known_gh_sha="${4:-}"
   local total=0 latest="" start=0 limit=1000
   local encBranch; encBranch="$(urlencode_py "$branch")"
   while :; do
@@ -91,6 +94,12 @@ get_bbs_commits_info() {
     local cnt; cnt="$(echo "$resp" | jq '.values | length')"
     if [[ -z "$latest" && "$cnt" -gt 0 ]]; then
       latest="$(echo "$resp" | jq -r '.values[0].id')"
+      # If caller supplied the GH SHA and it already matches, no need to count all pages
+      if [[ -n "$known_gh_sha" && "$latest" == "$known_gh_sha" ]]; then
+        # Return a sentinel count equal to GH count (caller checks SHA first)
+        echo "SKIP,${latest}"
+        return
+      fi
     fi
     total=$(( total + cnt ))
     local isLast; isLast="$(echo "$resp" | jq -r '.isLastPage')"
@@ -137,89 +146,179 @@ echo "=================================================="
 echo "Using CSV: ${CSV_PATH}"
 echo "Using Bitbucket Base URL: ${BASE_URL}"
 
+# ---- CSV helpers (RFC 4180 compliant) -----------------------------------------
+parse_csv_line() {
+  local line="$1"
+  local -a fields=()
+  local field="" in_quotes=false i char next
+  for ((i=0; i<${#line}; i++)); do
+    char="${line:$i:1}"
+    next="${line:$((i+1)):1}"
+    if [[ "${char}" == '"' ]]; then
+      if [[ "${in_quotes}" == true ]]; then
+        if [[ "${next}" == '"' ]]; then
+          field+='"'; ((i++))
+        else
+          in_quotes=false
+        fi
+      else
+        in_quotes=true
+      fi
+    elif [[ "${char}" == ',' && "${in_quotes}" == false ]]; then
+      fields+=("${field}")
+      field=""
+    else
+      field+="${char}"
+    fi
+  done
+  fields+=("${field}")
+  printf '%s\n' "${fields[@]}"
+}
+
+strip_quotes() {
+  local s="$1"
+  [[ ${s} == \"* ]] && s="${s#\"}"
+  [[ ${s} == *\" ]] && s="${s%\"}"
+  printf '%s' "$s"
+}
+
 # ---- CSV checks ---------------------------------------------------------------
 [[ -f "$CSV_PATH" ]] || { echo "[ERROR] CSV file not found: $CSV_PATH" | tee -a "$LOG_FILE"; exit 1; }
 [[ -s "$CSV_PATH" ]] || { echo "[ERROR] CSV has no rows: $CSV_PATH" | tee -a "$LOG_FILE"; exit 1; }
 
-# Validate header
-header="$(head -n1 "$CSV_PATH")"
-for col in project-key project-name repo github_org github_repo; do
-  echo "$header" | grep -q "$col" || { echo "Missing required column: ${col}" >&2; exit 1; }
+# Validate header and build column index
+REQUIRED_COLUMNS=(project-key project-name repo github_org github_repo)
+read -r HEADER_LINE < "$CSV_PATH"
+mapfile -t HEADER_FIELDS < <(parse_csv_line "${HEADER_LINE}")
+declare -A COLIDX=()
+for idx in "${!HEADER_FIELDS[@]}"; do
+  name="${HEADER_FIELDS[$idx]}"
+  name="${name%\"}"; name="${name#\"}"
+  COLIDX["$name"]="$idx"
 done
+missing_cols=()
+for col in "${REQUIRED_COLUMNS[@]}"; do
+  [[ -n "${COLIDX[$col]:-}" ]] || missing_cols+=("$col")
+done
+if [[ ${#missing_cols[@]} -gt 0 ]]; then
+  echo "Missing required column(s): ${missing_cols[*]}" >&2; exit 1
+fi
 
-summary_csv="validation-summary.csv"
+summary_csv="validation-summary-$(date +'%Y%m%d-%H%M%S').csv"
 echo "github_org,github_repo,bbs_project_key,bbs_repo,branch_count_bbs,branch_count_gh,branch_count_match,commits_match_all,shas_match_all,gh_notes" > "$summary_csv"
 
 echo "==> Starting validation..."
 
-# Process rows
-tail -n +2 "$CSV_PATH" | while IFS=',' read -r bbsProjectKey bbsProjectName bbsRepoSlug ghOrg ghRepo _vis; do
-  header_line="[$(date)] Processing: ${bbsProjectKey}/${bbsRepoSlug} -> ${ghOrg}/${ghRepo}"
-  echo "$header_line" | tee -a "$LOG_FILE"
+# ---- Parallel validation -------------------------------------------------------
+# Each repo is validated in a background subshell. Results are written to
+# per-repo temp files then merged in order into the summary CSV.
+validate_repo() {
+  local bbsProjectKey="$1" bbsRepoSlug="$2" ghOrg="$3" ghRepo="$4"
+  local out_file="$5"  # temp file for this repo's CSV row + log lines
 
-  # Optional snapshot (ignore failures)
-  gh repo view "${ghOrg}/${ghRepo}" --json createdAt,diskUsage,defaultBranchRef,isPrivate >/dev/null 2>&1 || true
+  {
+    echo "[$(date)] Processing: ${bbsProjectKey}/${bbsRepoSlug} -> ${ghOrg}/${ghRepo}"
 
-  ghExists="yes"
-  if ! gh_repo_exists "$ghOrg" "$ghRepo"; then
-    msg="[$(date)] GitHub repo not found or inaccessible: ${ghOrg}/${ghRepo}. Treating GH side as empty."
-    echo "$msg" | tee -a "$LOG_FILE"
-    ghExists="no"
-  fi
-
-  mapfile -t bbsBranches < <(get_bbs_branches "$bbsProjectKey" "$bbsRepoSlug")
-  mapfile -t ghBranches < <( [[ "$ghExists" == "yes" ]] && get_gh_branches "$ghOrg" "$ghRepo" || true )
-
-  bbsBranchCount="${#bbsBranches[@]}"
-  ghBranchCount="${#ghBranches[@]}"
-  branchCountOk="false"; [[ "$bbsBranchCount" -eq "$ghBranchCount" ]] && branchCountOk="true"
-  echo "[$(date)] Branch Count: BBS=${bbsBranchCount} GitHub=${ghBranchCount} $(status_marker "$branchCountOk")" | tee -a "$LOG_FILE"
-
-  missingInGH=$(comm -23 <(printf "%s\n" "${bbsBranches[@]}" | sort) <(printf "%s\n" "${ghBranches[@]}" | sort || true) || true)
-  missingInBBS=$(comm -13 <(printf "%s\n" "${bbsBranches[@]}" | sort) <(printf "%s\n" "${ghBranches[@]}" | sort || true) || true)
-  [[ -n "$missingInGH" ]] && echo "[$(date)] Branches missing in GitHub: $(echo "$missingInGH" | tr '\n' ', ')" | tee -a "$LOG_FILE"
-  [[ -n "$missingInBBS" ]] && echo "[$(date)] Branches missing in Bitbucket: $(echo "$missingInBBS" | tr '\n' ', ')" | tee -a "$LOG_FILE"
-
-  commitsMatchAll="false"
-  shasMatchAll="false"
-  if [[ "$ghExists" == "yes" ]]; then
-    mapfile -t common < <(comm -12 <(printf "%s\n" "${bbsBranches[@]}" | sort) <(printf "%s\n" "${ghBranches[@]}" | sort))
-    if (( ${#common[@]} > 0 )); then
-      commitsMatchAll="true"
-      shasMatchAll="true"
-      for br in "${common[@]}"; do
-        ghInfo="$(get_gh_commits_info "$ghOrg" "$ghRepo" "$br")"
-        bbsInfo="$(get_bbs_commits_info "$bbsProjectKey" "$bbsRepoSlug" "$br")"
-        ghCount="${ghInfo%%,*}"; ghSha="${ghInfo#*,}"
-        bbsCount="${bbsInfo%%,*}"; bbsSha="${bbsInfo#*,}"
-
-        countOk="false"; [[ "$ghCount" == "$bbsCount" ]] && countOk="true"
-        shaOk="false"; [[ "$ghSha" == "$bbsSha" ]] && shaOk="true"
-        [[ "$countOk" == "false" ]] && commitsMatchAll="false"
-        [[ "$shaOk" == "false" ]] && shasMatchAll="false"
-
-        echo "[$(date)] Branch '$br': BBS Commits=${bbsCount} GitHub Commits=${ghCount} $(status_marker "$countOk")" | tee -a "$LOG_FILE"
-        echo "[$(date)] Branch '$br': BBS SHA=${bbsSha} GitHub SHA=${ghSha} $(status_marker "$shaOk")" | tee -a "$LOG_FILE"
-      done
+    local ghExists="yes"
+    if ! gh_repo_exists "$ghOrg" "$ghRepo"; then
+      echo "[$(date)] GitHub repo not found or inaccessible: ${ghOrg}/${ghRepo}. Treating GH side as empty."
+      ghExists="no"
     fi
+
+    local bbsBranches=() ghBranches=()
+    mapfile -t bbsBranches < <(get_bbs_branches "$bbsProjectKey" "$bbsRepoSlug")
+    mapfile -t ghBranches < <( [[ "$ghExists" == "yes" ]] && get_gh_branches "$ghOrg" "$ghRepo" || true )
+
+    local bbsBranchCount="${#bbsBranches[@]}" ghBranchCount="${#ghBranches[@]}"
+    local branchCountOk="false"; [[ "$bbsBranchCount" -eq "$ghBranchCount" ]] && branchCountOk="true"
+    echo "[$(date)] Branch Count: BBS=${bbsBranchCount} GitHub=${ghBranchCount} $(status_marker "$branchCountOk")"
+
+    local missingInGH missingInBBS
+    missingInGH=$(comm -23 <(printf "%s\n" "${bbsBranches[@]}" | sort) <(printf "%s\n" "${ghBranches[@]}" | sort || true) || true)
+    missingInBBS=$(comm -13 <(printf "%s\n" "${bbsBranches[@]}" | sort) <(printf "%s\n" "${ghBranches[@]}" | sort || true) || true)
+    [[ -n "$missingInGH" ]]  && echo "[$(date)] Branches missing in GitHub: $(echo "$missingInGH" | tr '\n' ', ')"
+    [[ -n "$missingInBBS" ]] && echo "[$(date)] Branches missing in Bitbucket: $(echo "$missingInBBS" | tr '\n' ', ')"
+
+    local commitsMatchAll="false" shasMatchAll="false"
+    if [[ "$ghExists" == "yes" ]]; then
+      local common=()
+      mapfile -t common < <(comm -12 <(printf "%s\n" "${bbsBranches[@]}" | sort) <(printf "%s\n" "${ghBranches[@]}" | sort))
+      if (( ${#common[@]} > 0 )); then
+        commitsMatchAll="true"
+        shasMatchAll="true"
+        for br in "${common[@]}"; do
+          local ghInfo bbsInfo
+          ghInfo="$(get_gh_commits_info "$ghOrg" "$ghRepo" "$br")"
+          local ghCount="${ghInfo%%,*}" ghSha="${ghInfo#*,}"
+
+          # Pass ghSha so BBS side can short-circuit when SHA already matches
+          bbsInfo="$(get_bbs_commits_info "$bbsProjectKey" "$bbsRepoSlug" "$br" "$ghSha")"
+          local bbsCount="${bbsInfo%%,*}" bbsSha="${bbsInfo#*,}"
+
+          local shaOk="false"; [[ "$ghSha" == "$bbsSha" ]] && shaOk="true"
+          [[ "$shaOk" == "false" ]] && shasMatchAll="false"
+
+          local countOk="false"
+          if [[ "$bbsCount" == "SKIP" ]]; then
+            # SHA matched — commits are identical by definition
+            countOk="true"
+          else
+            [[ "$ghCount" == "$bbsCount" ]] && countOk="true"
+            [[ "$countOk" == "false" ]] && commitsMatchAll="false"
+            echo "[$(date)] Branch '$br': BBS Commits=${bbsCount} GitHub Commits=${ghCount} $(status_marker "$countOk")"
+          fi
+          echo "[$(date)] Branch '$br': BBS SHA=${bbsSha} GitHub SHA=${ghSha} $(status_marker "$shaOk")"
+        done
+      fi
+    fi
+
+    local gh_notes=""
+    if [[ "$ghExists" == "no" ]]; then
+      gh_notes="repo not found or no access"
+    elif [[ "$ghBranchCount" -eq 0 && "$bbsBranchCount" -gt 0 ]]; then
+      gh_notes="no branches on GH"
+    fi
+
+    echo "[$(date)] Validation complete for ${ghOrg}/${ghRepo}"
+    # Write the CSV row as a sentinel line prefixed with CSV: so we can extract it
+    printf 'CSV:%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+      "$ghOrg" "$ghRepo" "$bbsProjectKey" "$bbsRepoSlug" \
+      "$bbsBranchCount" "$ghBranchCount" "$branchCountOk" \
+      "$commitsMatchAll" "$shasMatchAll" "$gh_notes"
+  } > "$out_file" 2>&1
+}
+
+# Launch all repos in parallel
+declare -a PIDS=() OUTFILES=()
+while IFS= read -r line; do
+  mapfile -t F < <(parse_csv_line "$line")
+  bbsProjectKey="$(strip_quotes "${F[${COLIDX[project-key]}]}")"  
+  bbsRepoSlug="$(strip_quotes "${F[${COLIDX[repo]}]}")"
+  ghOrg="$(strip_quotes "${F[${COLIDX[github_org]}]}")"
+  ghRepo="$(strip_quotes "${F[${COLIDX[github_repo]}]}")"
+  tmp_out="$(mktemp)"
+  OUTFILES+=("$tmp_out")
+  validate_repo "$bbsProjectKey" "$bbsRepoSlug" "$ghOrg" "$ghRepo" "$tmp_out" &
+  PIDS+=("$!")
+done < <(tail -n +2 "$CSV_PATH")
+
+# Collect results in submission order
+for i in "${!PIDS[@]}"; do
+  wait "${PIDS[$i]}" || true
+  out="${OUTFILES[$i]}"
+  if [[ -f "$out" ]]; then
+    # Emit log lines (everything except the CSV: sentinel)
+    grep -v '^CSV:' "$out" | tee -a "$LOG_FILE"
+    # Append the CSV row (strip the CSV: prefix)
+    grep '^CSV:' "$out" | sed 's/^CSV://' >> "$summary_csv"
+    rm -f "$out"
   fi
-
-  gh_notes=""
-  if [[ "$ghExists" == "no" ]]; then
-    gh_notes="repo not found or no access"
-  elif [[ "$ghBranchCount" -eq 0 && "$bbsBranchCount" -gt 0 ]]; then
-    gh_notes="no branches on GH"
-  fi
-
-  echo "[$(date)] Validation complete for ${ghOrg}/${ghRepo}" | tee -a "$LOG_FILE"
-
-  echo "${ghOrg},${ghRepo},${bbsProjectKey},${bbsRepoSlug},${bbsBranchCount},${ghBranchCount},${branchCountOk},${commitsMatchAll},${shasMatchAll},${gh_notes}" >> "$summary_csv"
 done
 
 echo "[$(date)] All validations from CSV completed" | tee -a "$LOG_FILE"
 
-# Markdown table
-md="validation_summary_$(date +%Y%m%d).md"
+# Markdown table (name matches the summary CSV for easy correlation)
+md="${summary_csv%.csv}.md"
 {
   echo "| GitHub Repo | BBS Repo | Branch Count (BBS/GH) | Branch Count Match | All Commit Counts Match | All Latest SHAs Match | Notes |"
   echo "|---|---|---:|---|---|---|---|"

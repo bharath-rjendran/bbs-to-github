@@ -31,7 +31,7 @@
 # ./bbs2gh_migration_runner.sh --csv repos.csv --max-concurrent 3 --output output.csv
 # Optional: VERBOSE=1 for extra logs
 # ------------------------------------------------------------------------------
-set -o pipefail
+set -euo pipefail
 
 VERBOSE="${VERBOSE:-0}"
 
@@ -280,9 +280,11 @@ update_repo_status_in_csv() {
 resolve_key_path() {
   local input="${1:-}"
   if [[ -n "$input" && "$input" == *"BEGIN"* && "$input" == *"PRIVATE KEY"* ]]; then
-    local tmp="${TMPDIR:-/tmp}/bbs2gh_sshkey_$(date +'%Y%m%d-%H%M%S%3N').pem"
+    local tmp; tmp="$(mktemp --suffix=.pem)"
+    chmod 600 "$tmp"
     printf "%s" "$input" > "$tmp"
-    chmod 600 "$tmp" || true
+    # Register cleanup so the temp key file is removed when the subshell exits
+    trap 'rm -f "${tmp}"' EXIT
     echo "$tmp"
   elif [[ -z "$input" && -n "${SSH_PRIVATE_KEY_PATH:-}" ]]; then
     echo "$SSH_PRIVATE_KEY_PATH"
@@ -328,9 +330,6 @@ migrate_repository() {
       "$(printf "%q " "${STORAGE_ARGS[@]}")" \
       "${SSH_USER}" "${resolvedKey}" "${TARGET_API_URL}" "${gh_repo_visibility}"
 
-    # Export BBS credentials so gh extension can pick them up if needed
-    export BBS_USERNAME BBS_PASSWORD
-
     # Run migration: append output ONLY to log file (no tee to stdout)
     gh bbs2gh migrate-repo \
       --bbs-server-url "${BBS_BASE_URL}" \
@@ -342,20 +341,20 @@ migrate_repository() {
       --ssh-user "${SSH_USER}" \
       --ssh-private-key "${resolvedKey}" \
       --target-api-url "${TARGET_API_URL}" \
-      --target-repo-visibility "${gh_repo_visibility}" >>"${log_file}" 2>&1
+      --target-repo-visibility "${gh_repo_visibility}"
 
     # Assess log content
     if grep -q "No operation will be performed" "${log_file}"; then
-      printf '[%s] [FAILED] No operation performed - repository may already exist or migration was skipped\n' "$(date)" >> "${log_file}"
+      printf '[%s] [FAILED] No operation performed - repository may already exist or migration was skipped\n' "$(date)"
       return 1
     fi
     if ! grep -q "State: SUCCEEDED" "${log_file}"; then
-      printf '[%s] [FAILED] Migration did not reach SUCCEEDED state\n' "$(date)" >> "${log_file}"
+      printf '[%s] [FAILED] Migration did not reach SUCCEEDED state\n' "$(date)"
       return 1
     fi
 
     printf '[%s] [SUCCESS] Migration: %s/%s -> %s/%s\n' \
-      "$(date)" "${projectKey}" "${bbsRepoSlug}" "${github_org}" "${github_repo}" >> "${log_file}"
+      "$(date)" "${projectKey}" "${bbsRepoSlug}" "${github_org}" "${github_repo}"
     return 0
   } >> "${log_file}" 2>&1
 }
@@ -403,7 +402,7 @@ while IFS= read -r line; do
     continue
   fi
 
-  QUEUE+=("${projectKey},${projectName},${repoSlug},${github_org},${github_repo},${gh_repo_visibility}")
+  QUEUE+=("${projectKey}	${projectName}	${repoSlug}	${github_org}	${github_repo}	${gh_repo_visibility}")
 done < "${CSV_PATH}"
 
 ############################################
@@ -411,7 +410,7 @@ done < "${CSV_PATH}"
 ############################################
 write_migration_status_csv_header
 for item in "${QUEUE[@]}"; do
-  IFS=',' read -r projectKey projectName repoSlug github_org github_repo gh_repo_visibility <<< "${item}"
+  IFS=$'\t' read -r projectKey projectName repoSlug github_org github_repo gh_repo_visibility <<< "${item}"
   append_status_row "${projectKey}" "${projectName}" "${repoSlug}" "${github_org}" "${github_repo}" "${gh_repo_visibility}" "Pending" ""
 done
 
@@ -442,8 +441,8 @@ while (( ${#QUEUE[@]} > 0 )) || (( ${#JOB_PIDS[@]} > 0 )); do
     repo_info="${QUEUE[0]}"
     QUEUE=("${QUEUE[@]:1}")
 
-    IFS=',' read -r projectKey projectName repoSlug github_org github_repo gh_repo_visibility <<< "${repo_info}"
-    log_file="migration-${github_repo}-$(date +%Y%m%d-%H%M%S).txt"
+    IFS=$'\t' read -r projectKey projectName repoSlug github_org github_repo gh_repo_visibility <<< "${repo_info}"
+    log_file="migration-${github_org}-${github_repo}-$(date +%Y%m%d-%H%M%S).txt"
 
     # Update CSV with "In Progress" + log file
     update_repo_status_in_csv "${github_org}" "${github_repo}" "In Progress" "${log_file}"
@@ -518,7 +517,3 @@ echo "[INFO] All migrations completed."
 total_repos=$(( $(wc -l < "${CSV_PATH}") - 1 ))
 echo "[SUMMARY] Total: ${total_repos} / Migrated: ${#MIGRATED[@]} / Failed: ${#FAILED[@]}"
 echo "[INFO] Wrote migration results with Migration_Status column: ${OUTPUT_CSV_PATH}"
-
-# Clean up per-repo log files - their content was already streamed to the Actions run log
-rm -f migration-*.txt
-echo "[INFO] Cleaned up per-repo log files."

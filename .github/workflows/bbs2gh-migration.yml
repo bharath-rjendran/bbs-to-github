@@ -46,7 +46,6 @@ on:
 permissions:
   contents: read
   actions: write
-  issues: write
 
 jobs:
   prechecks:
@@ -289,24 +288,46 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
-      - name: Upload verbose logs (if produced)
+      - name: Write migration step summary
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: verbose-logs-${{ github.run_id }}
-          path: |
-            ${{ runner.temp }}/bbs2gh-run/*.log
-            ${{ runner.temp }}/bbs2gh-run/*/*.log
-            ${{ runner.temp }}/bbs2gh-run/logs/*/*.log
-          retention-days: 90
-          if-no-files-found: warn
+        shell: bash
+        run: |
+          set -euo pipefail
+          out_csv=$(ls -1t "${{ runner.temp }}/bbs2gh-run"/repo_migration_output-*.csv 2>/dev/null | head -n 1 || true)
+
+          {
+            echo "# 📦 Migration Summary"
+            echo
+            if [[ -z "$out_csv" || ! -f "$out_csv" ]]; then
+              echo "⚠️ No migration output CSV found."
+            else
+              total=$(awk -F',' 'NR>1 {c++} END{print c+0}' "$out_csv")
+              succeeded=$(awk -F',' 'NR>1 {gsub(/"/, "", $7); if ($7=="Success") c++} END{print c+0}' "$out_csv")
+              failed=$(awk -F',' 'NR>1 {gsub(/"/, "", $7); if ($7=="Failure") c++} END{print c+0}' "$out_csv")
+
+              echo "- **Total repos**: $total"
+              echo "- **Migrated**: ✅ $succeeded"
+              echo "- **Failed**: $( [[ "$failed" -gt 0 ]] && echo "❌ $failed" || echo "0" )"
+              echo
+              echo "## Repo-wise Results"
+              echo
+              echo "| Project Key | BBS Repo | GitHub Org | GitHub Repo | Status | Log |"
+              echo "|---|---|---|---|---|---|"
+              awk -F',' 'NR>1 {
+                for(i=1;i<=NF;i++) gsub(/"/,"",$i);
+                mark=($7=="Success"?"✅":"❌");
+                printf("| `%s` | `%s` | `%s` | `%s` | %s %s | `%s` |\n",
+                  $1, $3, $4, $5, mark, $7, $8);
+              }' "$out_csv"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   validate:
     name: Post-migration Validation
     runs-on: ${{ inputs.runner_label }}
     timeout-minutes: 120
     needs: [migrate]
-    if: ${{ needs.migrate.result == 'success' }}
+    if: ${{ needs.migrate.result != 'cancelled' }}
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       GH_PAT: ${{ secrets.GH_PAT }}
@@ -346,7 +367,7 @@ jobs:
           set -euo pipefail
           mkdir -p "${{ runner.temp }}/bbs2gh-validate"
 
-      # Same auth hardening for 2_validation.sh because it also requires `gh auth status` to succeed. [8](blob:https://www.microsoft365.com/e9c08534-00e5-4e08-97cd-d9ef2bc9b32b)
+      # Same auth hardening for 2_validation.sh because it also requires `gh auth status` to succeed.
       - name: Prepare clean gh auth for validation (fixes gh auth status inside script)
         shell: bash
         env:
@@ -380,6 +401,33 @@ jobs:
             -c "$GITHUB_WORKSPACE/repos.csv" \
             -b "${{ inputs.bbs_base_url }}"
 
+      - name: Write validation step summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          md=$(ls -1t "${{ runner.temp }}/bbs2gh-validate"/validation-summary-*.md 2>/dev/null | head -n 1 || true)
+          csv=$(ls -1t "${{ runner.temp }}/bbs2gh-validate"/validation-summary-*.csv 2>/dev/null | head -n 1 || true)
+
+          {
+            echo "# 🔍 Validation Summary"
+            echo
+            if [[ -z "$csv" || ! -f "$csv" ]]; then
+              echo "⚠️ No validation summary CSV found."
+            else
+              total=$(awk -F',' 'NR>1 {c++} END{print c+0}' "$csv")
+              passed=$(awk -F',' 'NR>1 && $7=="true" && $8=="true" && $9=="true" {c++} END{print c+0}' "$csv")
+              failed=$(( total - passed ))
+              echo "- **Total repos validated**: $total"
+              echo "- **Fully matching**: ✅ $passed"
+              echo "- **With discrepancies**: $( [[ "$failed" -gt 0 ]] && echo \"❌ $failed\" || echo \"0\" )"
+              echo
+            fi
+            if [[ -n "$md" && -f "$md" ]]; then
+              cat "$md"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload validation outputs
         if: always()
         uses: actions/upload-artifact@v4
@@ -387,7 +435,7 @@ jobs:
           name: validation-results-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/bbs2gh-validate/validation-log-*.txt
-            ${{ runner.temp }}/bbs2gh-validate/validation-summary.csv
-            ${{ runner.temp }}/bbs2gh-validate/validation_summary_*.md
+            ${{ runner.temp }}/bbs2gh-validate/validation-summary-*.csv
+            ${{ runner.temp }}/bbs2gh-validate/validation-summary-*.md
           retention-days: 30
           if-no-files-found: warn
