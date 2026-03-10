@@ -376,7 +376,7 @@ FAILED=()
 ############################################
 LINE_NUM=0
 while IFS= read -r line; do
-  ((LINE_NUM++))
+  ((LINE_NUM++)) || true
   [[ ${LINE_NUM} -eq 1 ]] && continue
 
   mapfile -t F < <(parse_csv_line "${line}")
