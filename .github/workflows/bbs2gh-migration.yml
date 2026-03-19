@@ -115,39 +115,6 @@ jobs:
 
           echo "open_pr_repos=$open_pr_repos" >> "$GITHUB_OUTPUT"
 
-          {
-            echo "# 🔎 Pre-migration Summary (Open PRs)"
-            echo
-            echo "- **CSV input**: \`repos.csv\`"
-            echo "- **Bitbucket Base URL**: \`${BBS_BASE_URL}\`"
-            echo
-
-            if [[ -z "$out_csv" || ! -f "$out_csv" ]]; then
-              echo "⚠️ No prechecks output CSV found (bbs_pr_validation_output-*.csv)."
-            else
-              total=$(awk -F',' 'NR>1 {c++} END{print c+0}' "$out_csv")
-              warn=$open_pr_repos
-              ready=$(( total - warn ))
-
-              echo "## Overall"
-              echo
-              echo "- **Total repos**: $total"
-              echo "- **Repos with open PRs (warning)**: ⚠️ $warn"
-              echo "- **Repos with 0 open PRs (ready)**: ✅ $ready"
-              echo
-              echo "## Repo-wise Details"
-              echo
-              echo "| Project Key | Repo | Open PRs | Ready |"
-              echo "|---|---|---:|---|"
-              awk -F',' 'NR>1 {
-                pk=$1; repo=$3; prs=$5; ready=$7;
-                gsub(/\r/,"",ready);
-                mark=(ready=="true"?"✅":"⚠️");
-                printf("| `%s` | `%s` | %s | %s |\n", pk, repo, prs, mark);
-              }' "$out_csv"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-
       - name: Upload prechecks output
         if: always()
         uses: actions/upload-artifact@v4
