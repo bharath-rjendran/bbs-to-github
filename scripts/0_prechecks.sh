@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Usage:
-#   ./0_pr_pipeline_check.sh [-c repos.csv] [-o output.csv] [-p "KEY1,KEY2"]
+#   ./0_prechecks.sh [-c repos.csv] [-o output.csv] [-p "KEY1,KEY2"]
 #
-# CSV minimum columns if provided: project-key,repo
+# CSV columns required: project-key, project-name, repo, github_org, github_repo, gh_repo_visibility
 # Env: BBS_BASE_URL + (BBS_PAT or BBS_USERNAME+BBS_PASSWORD with BBS_AUTH_TYPE=Basic)
 
 CSV_PATH="repos.csv"
@@ -105,8 +105,8 @@ get_open_pr_count() {
 }
 
 echo ""
-echo " Bitbucket Pipeline Readiness Check (Open PRs only) "
-echo "===================================================="
+echo " Bitbucket Readiness Check (Open PRs only) "
+echo "============================================"
 
 # Load or discover input rows
 rows_tmp="$(mktemp)"
@@ -141,7 +141,7 @@ results_tmp="$(mktemp)"
 echo "project_key,project_name,repo_slug,is_archived,open_pr_count,warnings,ready_to_migrate" > "$results_tmp"
 
 total_open_prs=0
-while IFS=',' read -r projKey projName repoSlug isArchived; do
+while IFS=',' read -r projKey projName repoSlug isArchived _rest; do
   openPrs="$(get_open_pr_count "$projKey" "$repoSlug")"
   total_open_prs=$(( total_open_prs + openPrs ))
   warns=""

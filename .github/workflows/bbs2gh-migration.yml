@@ -50,7 +50,7 @@ permissions:
 
 jobs:
   prechecks:
-    name: Pre-migration Validation (Open PRs only)
+    name: Pre-check
     runs-on: ${{ inputs.runner_label }}
     timeout-minutes: 30
     outputs:
@@ -270,9 +270,8 @@ jobs:
           set -euo pipefail
           mkdir -p "${{ runner.temp }}/bbs2gh-run"
 
-      # ✅ THE ONLY REAL “MIGRATION AUTH” FIX:
-      # Use a clean GH_CONFIG_DIR and store DR login there, so `gh auth status` (default) inside 1_migration.sh succeeds.
-      - name: Prepare clean gh auth for migration (fixes gh auth status inside script)
+      # Use a clean GH_CONFIG_DIR so `gh auth status` inside 1_migration.sh resolves correctly for Data Residency endpoints.
+      - name: Prepare clean gh auth for migration
         shell: bash
         env:
           # blank to force stored credential creation
@@ -424,8 +423,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y jq python3
+          if ! command -v jq >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y jq python3
+          fi
 
       - name: Create validation working directory
         shell: bash
@@ -433,8 +434,8 @@ jobs:
           set -euo pipefail
           mkdir -p "${{ runner.temp }}/bbs2gh-validate"
 
-      # Same auth hardening for 2_validation.sh because it also requires `gh auth status` to succeed.
-      - name: Prepare clean gh auth for validation (fixes gh auth status inside script)
+      # Use a clean GH_CONFIG_DIR so `gh auth status` inside 2_validation.sh resolves correctly for Data Residency endpoints.
+      - name: Prepare clean gh auth for validation
         shell: bash
         env:
           GH_TOKEN: ''
@@ -452,7 +453,6 @@ jobs:
         working-directory: ${{ runner.temp }}/bbs2gh-validate
         env:
           GH_TOKEN: ''
-
           BBS_BASE_URL: ${{ env.BBS_BASE_URL }}
           BBS_PAT: ${{ secrets.BBS_PAT }}
           BBS_AUTH_TYPE: ${{ secrets.BBS_AUTH_TYPE }}

@@ -4,7 +4,7 @@
 # - Validates branch sets, commit counts, and latest SHAs between Bitbucket S/DC and GitHub
 # - Writes: validation-log-<date>.txt, validation-summary.csv, validation-summary.md
 #
-# CSV columns required: project-key, repo, url, github_org, github_repo (others ignored)
+# CSV columns required: project-key, project-name, repo, github_org, github_repo
 #
 # Env:
 #   BBS_BASE_URL   : e.g., http://bitbucket.example.com:7990 (or pass -b)
@@ -36,7 +36,7 @@ fi
 
 # Base URL
 if [[ -z "$BBS_BASE_URL" ]]; then
-  echo "BbsBaseUrl is required (pass -b or export BBS_BASE_URL)." >&2
+  echo "[ERROR] BBS_BASE_URL is required (pass -b or export BBS_BASE_URL)." >&2
   exit 1
 fi
 BASE_URL="${BBS_BASE_URL%/}"
@@ -292,7 +292,7 @@ validate_repo() {
 declare -a PIDS=() OUTFILES=()
 while IFS= read -r line; do
   mapfile -t F < <(parse_csv_line "$line")
-  bbsProjectKey="$(strip_quotes "${F[${COLIDX[project-key]}]}")"  
+  bbsProjectKey="$(strip_quotes "${F[${COLIDX[project-key]}]}")"
   bbsRepoSlug="$(strip_quotes "${F[${COLIDX[repo]}]}")"
   ghOrg="$(strip_quotes "${F[${COLIDX[github_org]}]}")"
   ghRepo="$(strip_quotes "${F[${COLIDX[github_repo]}]}")"

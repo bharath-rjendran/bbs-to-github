@@ -4,8 +4,8 @@
 # Accurate live status bar & counters:
 # QUEUE / IN PROGRESS / MIGRATED / FAILED
 #
-# CSV header (example):
-# project-key,project-name,repo,url,last-commit-date,repo-size-in-bytes,attachments-size-in-bytes,is-archived,pr-count,github_org,github_repo,gh_repo_visibility
+# CSV required columns:
+# project-key,project-name,repo,github_org,github_repo,gh_repo_visibility
 #
 # Env (global settings):
 # BBS_BASE_URL
@@ -28,7 +28,7 @@
 #   - Otherwise defaults to GitHub-owned storage: --use-github-storage
 #
 # CLI:
-# ./bbs2gh_migration_runner.sh --csv repos.csv --max-concurrent 3 --output output.csv
+# ./1_migration.sh --csv repos.csv --max-concurrent 3 --output output.csv
 # Optional: VERBOSE=1 for extra logs
 # ------------------------------------------------------------------------------
 set -euo pipefail
@@ -473,7 +473,7 @@ while (( ${#QUEUE[@]} > 0 )) || (( ${#JOB_PIDS[@]} > 0 )); do
       new_len=$(wc -c < "${log}")
       if (( new_len > last )); then
         delta_bytes=$(( new_len - last ))
-        echo "" # break the status line once
+        echo "" # newline to clear the status bar before streaming log output
         tail -c "${delta_bytes}" "${log}" | tr -d '\r' | while IFS= read -r l; do
           [[ -n "${l}" ]] && echo "${l}"
         done
