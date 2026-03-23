@@ -1,10 +1,10 @@
 # 🚀 Bitbucket Server to GitHub Repository Migration Pipeline
 
+> A GitHub Actions–based solution for migrating **Bitbucket Server** repositories to **GitHub** at scale. Supports parallel migrations, pre-migration checks, post-migration validation, multiple storage backends, and GitHub Data Residency.
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Migration Tool](https://img.shields.io/badge/Tool-gh--bbs2gh-181717.svg)](https://github.com/github/gh-bbs2gh)
 [![Platform](https://img.shields.io/badge/Platform-Bash%20%7C%20PowerShell-blue.svg)](https://github.com/github/gh-bbs2gh)
-
-> A GitHub Actions–based solution for migrating **Bitbucket Server** repositories to **GitHub** at scale. Supports parallel migrations, pre-migration checks, post-migration validation, multiple storage backends, and GitHub Data Residency.
 
 ---
 
@@ -21,112 +21,35 @@
 
 ## 📖 Introduction
 
-### Migration Challenges at Enterprise Scale
-
 Migrating repositories from Bitbucket Server to GitHub is a multi-stage process that includes readiness validation, parallel repository migration, and post-migration verification. When applied across hundreds or thousands of repositories, this process becomes difficult to coordinate, error-prone, and hard to scale using ad-hoc commands.
 
 This toolkit addresses those challenges through a staged, CSV-driven execution model. Each stage runs independently, produces machine-readable output, and can be executed from the command line or embedded inside a CI/CD pipeline. Failures in individual repositories are isolated — they do not block the remaining batch.
-
-### Pipeline Execution Model
-
-> ℹ️ **Informational Only**  
-> This section is provided for **conceptual understanding** of the migration flow.  
-> Actual execution behavior is governed by the script implementations.
-
-This toolkit orchestrates a **three-stage sequential migration process** from Bitbucket Server / Data Center to GitHub. Each stage can be run from the command line (Bash or PowerShell) or embedded in an Azure DevOps pipeline using the YAML definition in `samples/`.
-
-#### Key Features
-
-- **Parallel Migration:** Stage 1 runs up to `--max-concurrent` migrations simultaneously (default: 3, max: 20), with a live `QUEUED / IN PROGRESS / MIGRATED / FAILED` status bar.
-
-- **Isolated Failures:** Each repository migration is independent. A failure in one repository does not affect others in the same batch.
-
-- **Storage Auto-Detection:** Stage 1 automatically selects the correct storage backend — AWS S3, Azure Blob Storage, or GitHub-owned — based on the environment variables present.
-
-- **Data Residency Support:** All migration commands can be routed through a regional GitHub API endpoint via `--target-api-url` or the `TARGET_API_URL` environment variable.
-
-- **Cross-Platform:** All scripts have Bash (`scripts/`) and PowerShell (`misc/`) equivalents so the same workflow runs on Linux, macOS, and Windows.
-
-> **Note:** Since each stage produces a timestamped output CSV, you can review results between stages before advancing.
-
-```mermaid
----
-config:
-  theme: neo
-  layout: dagre
-  look: handDrawn
----
-flowchart TB
-    Start["<b>Start Migration</b>"] --> Stage0["<b>Stage 0: Prechecks</b><br>Validate connectivity & flag open PRs"]
-    Stage0 --> Review["<b>Review Output</b><br>bbs_pr_validation_output.csv"]
-    Review --> Stage1["<b>Stage 1: Repository Migration</b><br>Parallel BBS → GitHub migration"]
-    Stage1 --> Stage2["<b>Stage 2: Validation</b><br>Compare branches, commits & SHAs"]
-    Stage2 --> Success(["<b>Migration Complete ✓</b>"])
-
-    Start@{ shape: tag-proc}
-    Stage0@{ shape: procs}
-    Review@{ shape: doc}
-    Stage1@{ shape: procs}
-    Stage2@{ shape: procs}
-    style Stage0 fill:#e1f5ff,stroke-width:1px,stroke-dasharray: 0
-    style Review fill:#FFF9C4
-    style Stage1 fill:#e1f5ff
-    style Stage2 fill:#e1f5ff
-    style Success fill:#e1ffe1
-```
-
-#### Stage Execution Details
-
-Each stage executes a specific script and generates a timestamped output file. Review each output before advancing to the next stage.
-
-#### Stage 0️⃣: Prechecks (`0_prechecks.sh`)
-Executes a readiness check against the Bitbucket REST API to:
-
-- Authenticate against Bitbucket using PAT or Basic credentials
-- Read repository scope from `repos.csv` or auto-discover all projects and repositories
-- Check each repository for **open pull requests** and flag them as warnings
-- Produce `bbs_pr_validation_output-<timestamp>.csv` with per-repository readiness status
-
-> **⚠️ IMPORTANT**: Open PRs will **not** be migrated. Close or merge all open PRs before proceeding to Stage 1 to avoid data loss.
-
-#### Stage 1️⃣: Repository Migration (`1_migration.sh`)
-Executes parallel BBS → GitHub migrations to:
-
-- Read source/target mappings from `repos.csv`
-- Run up to `--max-concurrent` migrations in parallel using `gh bbs2gh migrate-repo`
-- Auto-detect the storage backend (AWS S3, Azure Blob, or GitHub-owned)
-- Display a live status bar: `QUEUED / IN PROGRESS / MIGRATED / FAILED`
-- Write `repo_migration_output-<timestamp>.csv` tracking the final status of each repository
-
-#### Stage 2️⃣: Validation (`2_validation.sh`)
-Executes post-migration validation (against successfully migrated repos only) to:
-
-- Compare branch names between Bitbucket and GitHub
-- Verify commit counts match for each branch
-- Validate latest commit SHAs to confirm complete history transfer
-- Produce three output artifacts:
-  - `validation-log-<timestamp>.txt` — full verbose log
-  - `validation-summary.csv` — machine-readable per-repository results
-  - `validation-summary.md` — human-readable Markdown report
 
 ---
 
 ## ⚠️ Limitations
 
-#### 1️⃣ What Gets Migrated
-- Git repository content (all files)
-- Complete commit history
-- All branches and tags
-- Commit metadata (authors, dates, messages, SHAs)
+- Limitation of GHE
+  - 2 GiB size limit for a single Git commit: No single commit in your Git repository can be larger than 2 GiB.
+  - 255 byte limit for Git references: No single Git reference, commonly known as a "ref", can have a name larger than 255 bytes.
+  - 100 MiB file size limit: After you complete your migration, no single file in your Git repository can be larger than 100 MiB.
 
-**Not migrated:** Open pull requests, Bitbucket pipeline definitions, webhooks, or access permissions.
+- Limitations of GitHub Enterprise Importer:
+  - 40 GiB size limit for repository archives: The Importer cannot migrate repositories with more than 40 GiB of combined git data and metadata in the repository archive.
+  - 400 MiB file size limit: no single file in your Git repository can be larger than 400 MiB.
+  - Git LFS objects not migrated.
+  - Delayed code search functionality: Re-indexing the search index can take a few hours after a repository is migrated, and code searches may return unexpected results until re-indexing is complete.
 
-**Recommendation:** Complete or abandon all active pull requests before migrating.
+- What Gets Migrated
+  - Git repository content (all files)
+  - Complete commit history
+  - All branches and tags
+  - Commit metadata (authors, dates, messages, SHAs)
 
-#### 2️⃣ Maximum Concurrency
-- The migration stage enforces a hard cap of **20 concurrent migrations** per run.
-- The default concurrency is **3**. Increase with `--max-concurrent` up to the limit.
-- The actual repository migration runs on **GitHub's backend services**, not on the local machine. The script only polls migration status at regular intervals.
+- Maximum Concurrency
+  - The migration stage enforces a hard cap of **20 concurrent migrations** per run.
+  - The default concurrency is **3**. Increase with `--max-concurrent` up to the limit.
+  - The actual repository migration runs on **GitHub's backend services**, not on the local machine. The script only polls migration status at regular intervals.
 
 - **Track Long-Running Migrations:**
 If a migration is taking longer than expected, monitor progress directly using the GitHub CLI:
@@ -138,43 +61,16 @@ gh migration monitor
 
 [GitHub Migration Monitor](https://github.com/mona-actions/gh-migration-monitor)
 
-#### 3️⃣ SSH Key Requirement
-- The SSH private key used for migration must be **unencrypted** (no passphrase).
-- Provide the key via `SSH_PRIVATE_KEY_PATH` (path to a file) or `SSH_PRIVATE_KEY` (raw PEM content).
-
-#### 4️⃣ Storage Backend Exclusivity
-AWS S3 and Azure Blob Storage **cannot be configured simultaneously**. Configure exactly one, or neither to fall back to GitHub-owned storage.
-
-| Backend | Required Variables |
-|---------|--------------------|
-| AWS S3 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_BUCKET_NAME`, `AWS_REGION` |
-| Azure Blob | `AZURE_STORAGE_CONNECTION_STRING` |
-| GitHub-owned | _(no variables needed — automatic fallback)_ |
-
-#### 5️⃣ Bitbucket Cloud Not Supported
-This toolkit targets **Bitbucket Server and Data Center** only. For Bitbucket Cloud migrations, use the Bitbucket Cloud path of the `gh bbs2gh` extension.
-
 ---
 
 ## ⚙️ Prerequisites
 
-### Required Tools
+- To migrate a repository, you must be an organization owner for the destination organization in GitHub, or an organization owner must grant you the migrator role.
+- You must also have required permissions and access to your Bitbucket Server instance:
+  -  Admin or super admin permissions.
+  -  If your Bitbucket Server instance runs Linux, SFTP access to the instance, using a supported SSH private key.
+  -  If your Bitbucket Server instance runs Windows, file sharing (SMB) access to the instance.
 
-| Tool | Purpose | Installation |
-|------|---------|-------------|
-| **GitHub CLI** (`gh`) | Core migration engine | [cli.github.com](https://cli.github.com) |
-| `gh bbs2gh` extension | BBS migration extension | `gh extension install github/gh-bbs2gh` |
-| **`jq`** | JSON parsing in Bash scripts | `apt install jq` / `brew install jq` |
-| **`curl`** | Bitbucket REST API calls | Pre-installed on most systems |
-| **`python3`** | URL encoding in validation script | Pre-installed on most systems |
-
-> **Windows users:** PowerShell equivalents are available in `misc/`. PowerShell 7+ (`pwsh`) is recommended.
-
-### Required Access
-
-- **GitHub PAT** with `repo`, `admin:org`, and `workflow` scopes — stored as `GH_PAT`.
-- **Bitbucket Server credentials** — either a PAT (`BBS_PAT`, recommended) or username/password with `BBS_AUTH_TYPE=Basic`.
-- **SSH access** to the Bitbucket Server host with a passphrase-free private key.
 
 ---
 
