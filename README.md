@@ -29,37 +29,33 @@ This toolkit addresses those challenges through a staged, CSV-driven execution m
 
 ## ⚠️ Limitations
 
-- Limitation of GHE
-  - 2 GiB size limit for a single Git commit: No single commit in your Git repository can be larger than 2 GiB.
-  - 255 byte limit for Git references: No single Git reference, commonly known as a "ref", can have a name larger than 255 bytes.
-  - 100 MiB file size limit: After you complete your migration, no single file in your Git repository can be larger than 100 MiB.
+- **Repository Migration Size Limits**
+The [GitHub Enterprise Importer](https://github.com/github/gh-ado2gh) has the following size limits:
 
-- Limitations of GitHub Enterprise Importer:
-  - 40 GiB size limit for repository archives: The Importer cannot migrate repositories with more than 40 GiB of combined git data and metadata in the repository archive.
-  - 400 MiB file size limit: no single file in your Git repository can be larger than 400 MiB.
-  - Git LFS objects not migrated.
-  - Delayed code search functionality: Re-indexing the search index can take a few hours after a repository is migrated, and code searches may return unexpected results until re-indexing is complete.
+| Item | Maximum Size |
+|------|--------------|
+| Repository archive | ~40 GiB |
+| Single file (during migration) | 400 MiB |
+| Single file (after migration) | 100 MiB (larger files must use Git LFS) |
+| Single commit | 2 GiB |
 
-- What Gets Migrated
+- **What Gets Migrated:**
   - Git repository content (all files)
   - Complete commit history
   - All branches and tags
   - Commit metadata (authors, dates, messages, SHAs)
 
-- Maximum Concurrency
+- **Maximum Concurrency:**
   - The migration stage enforces a hard cap of **20 concurrent migrations** per run.
   - The default concurrency is **3**. Increase with `--max-concurrent` up to the limit.
   - The actual repository migration runs on **GitHub's backend services**, not on the local machine. The script only polls migration status at regular intervals.
 
 - **Track Long-Running Migrations:**
-If a migration is taking longer than expected, monitor progress directly using the GitHub CLI:
-
-```bash
-gh extension install mona-actions/gh-migration-monitor
-gh migration monitor
-```
-
-[GitHub Migration Monitor](https://github.com/mona-actions/gh-migration-monitor)
+  - If a migration is taking longer than expected, monitor progress directly using the GitHub CLI: [GitHub Migration Monitor](https://github.com/mona-actions/gh-migration-monitor)
+    ```bash
+    gh extension install mona-actions/gh-migration-monitor
+    gh migration monitor
+    ```
 
 ---
 
