@@ -422,6 +422,42 @@ jobs:
           set -euo pipefail
           mkdir -p "${{ runner.temp }}/bbs2gh-validate"
 
+      - name: Download migration output CSV
+        uses: actions/download-artifact@v4
+        with:
+          name: migration-output-csv-${{ github.run_id }}
+          path: ${{ runner.temp }}/bbs2gh-migrate-out
+
+      - name: Build filtered CSV (successful migrations only)
+        id: filter-csv
+        shell: bash
+        run: |
+          set -euo pipefail
+          mig_csv=$(ls -1t "${{ runner.temp }}/bbs2gh-migrate-out"/repo_migration_output-*.csv 2>/dev/null | head -n 1 || true)
+          filtered="${{ runner.temp }}/bbs2gh-validate/repos-validated.csv"
+
+          if [[ -z "$mig_csv" || ! -f "$mig_csv" ]]; then
+            echo "::warning::No migration output CSV found — falling back to full repos.csv"
+            cp "$GITHUB_WORKSPACE/repos.csv" "$filtered"
+          else
+            # Header from original repos.csv (project-key,project-name,repo,github_org,github_repo,gh_repo_visibility)
+            head -n 1 "$GITHUB_WORKSPACE/repos.csv" > "$filtered"
+            # Keep rows where col 7 (Migration_Status) == Success
+            awk -F',' 'NR>1 { gsub(/"/, "", $7); if ($7=="Success") print $1","$2","$3","$4","$5","$6 }' "$mig_csv" >> "$filtered"
+            count=$(awk 'NR>1' "$filtered" | wc -l)
+            echo "Repos to validate: $count"
+            echo "count=$count" >> "$GITHUB_OUTPUT"
+          fi
+          echo "filtered_csv=$filtered" >> "$GITHUB_OUTPUT"
+
+      - name: Skip validation if no repos succeeded
+        if: steps.filter-csv.outputs.count == '0'
+        shell: bash
+        run: |
+          echo "::notice::All migrations failed — skipping validation."
+          echo "ℹ️ No repositories were successfully migrated — validation skipped." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
       # Use a clean GH_CONFIG_DIR so `gh auth status` inside 2_validation.sh resolves correctly for Data Residency endpoints.
       - name: Prepare clean gh auth for validation
         shell: bash
@@ -452,7 +488,7 @@ jobs:
           chmod +x "$GITHUB_WORKSPACE"/scripts/*.sh || true
 
           "$GITHUB_WORKSPACE"/scripts/2_validation.sh \
-            -c "$GITHUB_WORKSPACE/repos.csv" \
+            -c "${{ steps.filter-csv.outputs.filtered_csv }}" \
             -b "${BBS_BASE_URL}"
 
       - name: Write validation step summary
