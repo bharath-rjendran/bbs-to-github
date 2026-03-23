@@ -119,8 +119,6 @@ jobs:
           echo "open_pr_repos=$open_pr_repos" >> "$GITHUB_OUTPUT"
 
           {
-            echo "**🔍 Pre-check Summary**"
-            echo
             if [[ -z "$out_csv" || ! -f "$out_csv" ]]; then
               echo "⚠️ No pre-check output CSV found."
             else
