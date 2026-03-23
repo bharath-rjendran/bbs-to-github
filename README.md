@@ -1,4 +1,4 @@
-# 🚀 Bitbucket Server → GitHub Migration Toolkit (BBS2GH)
+# 🚀 Bitbucket Server to GitHub Repository Migration Pipeline
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Migration Tool](https://img.shields.io/badge/Tool-gh--bbs2gh-181717.svg)](https://github.com/github/gh-bbs2gh)
