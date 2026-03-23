@@ -142,7 +142,6 @@ declare -A COLIDX=()
 for idx in "${!HEADER_FIELDS[@]}"; do
   name="${HEADER_FIELDS[$idx]}"
   name="${name%\"}"; name="${name#\"}"
-  [[ -z "$name" ]] && continue
   COLIDX["$name"]="$idx"
 done
 missing_cols=()
