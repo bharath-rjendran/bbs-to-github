@@ -50,6 +50,9 @@ The [GitHub Enterprise Importer](https://github.com/github/gh-ado2gh) has the fo
   - The default concurrency is **3**. Increase with `--max-concurrent` up to the limit.
   - The actual repository migration runs on **GitHub's backend services**, not on the local machine. The script only polls migration status at regular intervals.
 
+ - **Github Hosted runners timeout:**
+   - It is recommended to run GitHub Actions on self-hosted runners, where the job timeout can be configured to 0, allowing long-running migrations to complete without interruption. By contrast, GitHub-hosted runners are limited to a maximum job runtime of 360 minutes.
+
 - **Track Long-Running Migrations:**
   - If a migration is taking longer than expected, monitor progress directly using the GitHub CLI: [GitHub Migration Monitor](https://github.com/mona-actions/gh-migration-monitor)
     ```bash
