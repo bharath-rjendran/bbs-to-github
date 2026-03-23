@@ -81,6 +81,10 @@ The [GitHub Enterprise Importer](https://github.com/github/gh-ado2gh) has the fo
     - `SSH_USER` - SSH username for the Bitbucket Server host.
     - `SSH_PRIVATE_KEY` — an unencrypted (passphrase-free) private key.
 - The `repos.csv` file must exist with the required columns: `project-key`, `project-name`, `repo`, `github_org`, `github_repo`, `gh_repo_visibility`.
+- **Optional Storage backend:**
+  - **AWS S3:** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_BUCKET_NAME`, `AWS_REGION`
+  - **Azure Blob:** `AZURE_STORAGE_CONNECTION_STRING`
+  - **Github-owned:** 	*(nothing needed — automatic fallback)*
 
 
 
