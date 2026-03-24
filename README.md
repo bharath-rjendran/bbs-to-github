@@ -93,6 +93,27 @@ The [GitHub Enterprise Importer](https://github.com/github/gh-ado2gh) has the fo
 
 ## 🔧 Initial Setup
 
+The workflow file is already present at `bbs2gh-migration.yml`. You only need to configure the repository with the right secrets, variables, and environment on GitHub.
+
+- **Add Repository Secrets:** Go to your GitHub repo → `Settings` → `Security` → `Secrets and variables` → `Actions` → `Secrets` → `New repository secret`, and add the following:
+  - `GH_PAT`: GitHub PAT with `repo`, `admin:org`, and `workflow` scopes
+  - `BBS_PAT`: Bitbucket Server PAT (recommended)
+  - `BBS_USERNAME`: Bitbucket username (if using Basic auth instead)
+  - `BBS_PASSWORD`: Bitbucket password (if using Basic auth instead)
+  - `SSH_USER`: SSH username for the Bitbucket Server host
+  - `SSH_PRIVATE_KEY`: Contents of a passphrase-free private key (e.g. `~/.ssh/id_rsa`)
+  - **Storage backend secrets** (add only one set, or none for GitHub-owned storage):
+    - `AZURE_STORAGE_CONNECTION_STRING`: Azure Blob Storage
+    - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_BUCKET_NAME`, `AWS_REGION`: AWS S3
+  - **Add Repository Variables:** Go to `Settings` → `Security` → `Secrets and variables` → `Actions` → `Variables` → `New Repository variable`, and add:
+    - `BBS_BASE_URL`: Bitbucket Server URL e.g. http://bitbucket.example.com:7990
+    - `TARGET_API_URL`: Only for GitHub Data Residency e.g. https://api.tenant.ghe.com
+  - **Create the migration-approval Environment:** The migration job is gated by a required reviewer. Go to `Settings` → `Environments` → `New environment`, name it exactly: `migration-approval`
+  - **Then add one or more Required reviewers** - the migration job will pause and wait for approval before running.
+   
+  
+
+
 Complete these steps before your first migration run:
 
 #### 1️⃣ 🔐 Authenticate the GitHub CLI
