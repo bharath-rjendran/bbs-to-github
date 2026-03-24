@@ -15,7 +15,6 @@
 - [Prerequisites](#️-prerequisites)
 - [Initial Setup](#-initial-setup)
 - [Quick Start](#-quick-start)
-- [Artifacts and References](#-artifacts-and-references)
 
 ---
 
@@ -142,97 +141,11 @@ The workflow file is already present at `bbs2gh-migration.yml`. You only need to
       - ✅ All entries show Matching for branches, commit counts, and latest SHAs.
 
 
-
-
 ---
 
-#### 1️⃣ **Make scripts executable** (Linux / macOS)
-```bash
-chmod +x scripts/*.sh
-```
-
-#### 2️⃣ **Run Stage 0 — Prechecks**
-```bash
-./scripts/0_prechecks.sh -c repos.csv
-```
-
-Review the output report and resolve any flagged open PRs before continuing:
-
-| Stage | Output File | What to Check |
-|-------|-------------|---------------|
-| **Stage 0: Prechecks** | `bbs_pr_validation_output-<timestamp>.csv` | ✅ No `OPEN_PRS` warnings remain |
-
-#### 3️⃣ **Run Stage 1 — Migration**
-```bash
-./scripts/1_migration.sh --csv repos.csv --max-concurrent 5
-```
-
-Monitor the live status bar and verify the output:
-
-| Stage | Output File | What to Check |
-|-------|-------------|---------------|
-| **Stage 1: Migration** | `repo_migration_output-<timestamp>.csv` | ✅ All repositories show `MIGRATED` |
-
-#### 4️⃣ **Run Stage 2 — Validation**
-```bash
-./scripts/2_validation.sh -c repos.csv
-```
-
-Review the validation report:
-
-| Stage | Output File | What to Check |
-|-------|-------------|---------------|
-| **Stage 2: Validation** | `validation-summary.md` | ✅ All entries show `✅ Matching` for branches, commits, and SHAs |
-
----
-
-### Windows (PowerShell)
-
-```powershell
-# Stage 0 — Prechecks
-pwsh misc/0_prechecks.ps1 -c repos.csv
-
-# Stage 1 — Migration
-pwsh misc/1_migration.ps1 --csv repos.csv --max-concurrent 5
-
-# Stage 2 — Validation
-pwsh misc/2_validation.ps1 -c repos.csv
-```
-
-### Azure Pipelines
-
-A ready-to-use pipeline definition is available at `samples/ado2gh-migration.yml`. Configure a variable group named `core-entauto-github-migration-secrets` containing your `GH_PAT` and Bitbucket credentials, then import the YAML into your Azure DevOps project.
-
----
-
-## 📎 Artifacts and References
-
-After all three stages complete successfully, confirm the following checklist before decommissioning Bitbucket repositories.
-
-- [ ] **Stage 0 output** — No `OPEN_PRS` warnings remain (or you have acknowledged the loss of open PRs).
-- [ ] **Stage 1 output** — All repositories in `repo_migration_output-<timestamp>.csv` show `MIGRATED`.
-- [ ] **Stage 2 output** — All entries in `validation-summary.md` show `✅ Matching` for branches, commit counts, and latest SHAs.
-- [ ] **GitHub repository settings** — Confirm visibility, branch protection rules, and team access are correctly configured.
-- [ ] **CI/CD pipelines** — Update pipeline configurations to point to the new GitHub repository URLs.
-- [ ] **Webhooks and integrations** — Reconfigure Bitbucket webhooks, Jira integrations, or any notification services.
-- [ ] **Developer workstations** — Notify developers of the new remote URLs and provide instructions to update local clones:
-
-  ```bash
-  git remote set-url origin https://github.com/<org>/<repo>.git
-  ```
-
-### Output Artifacts Reference
-
-| File | Stage | Description |
-|------|-------|-------------|
-| `bbs_pr_validation_output-<timestamp>.csv` | 0 | Per-repository open PR counts and migration readiness |
-| `repo_migration_output-<timestamp>.csv` | 1 | Per-repository migration status (`MIGRATED` / `FAILED`) |
-| `validation-log-<timestamp>.txt` | 2 | Full verbose validation log |
-| `validation-summary.csv` | 2 | Machine-readable per-repository validation results |
-| `validation-summary.md` | 2 | Human-readable Markdown validation report |
-
+ 
 **Next Steps:**
-- **More repositories?** Update `repos.csv` and rerun the pipeline from Stage 0
-- **Partial failures?** Fix the root cause, remove successfully migrated repos from `repos.csv`, and rerun Stage 1 for remaining repos
+- **More repositories?** Update `repos.csv` and rerun the workflow
+- **Partial failures?** Fix the root cause, remove successfully migrated repos from `repos.csv`, and rerun workflow for remaining repos
 
-> **💡 Tip:** Once all checks pass and teams are working from GitHub, decommission or archive Bitbucket repositories following your organization's retention policy.
+
