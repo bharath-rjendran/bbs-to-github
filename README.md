@@ -93,7 +93,6 @@ The workflow file is already present at `bbs2gh-migration.yml`. You only need to
 
 - **Add Repository Secrets:** Go to your GitHub repo → `Settings` → `Security` → `Secrets and variables` → `Actions` → `Secrets` → `New repository secret`, and add the following:
   - `GH_PAT`: GitHub PAT with `repo`, `admin:org`, and `workflow` scopes
-  - `BBS_PAT`: Bitbucket Server PAT (recommended)
   - `BBS_USERNAME`: Bitbucket username (if using Basic auth instead)
   - `BBS_PASSWORD`: Bitbucket password (if using Basic auth instead)
   - `SSH_USER`: SSH username for the Bitbucket Server host
@@ -102,6 +101,7 @@ The workflow file is already present at `bbs2gh-migration.yml`. You only need to
     - `AZURE_STORAGE_CONNECTION_STRING`: Azure Blob Storage
     - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_BUCKET_NAME`, `AWS_REGION`: AWS S3
   - **Add Repository Variables:** Go to `Settings` → `Security` → `Secrets and variables` → `Actions` → `Variables` → `New Repository variable`, and add:
+    - `BBS_AUTH_TYP`: Basic
     - `BBS_BASE_URL`: Bitbucket Server URL e.g. http://bitbucket.example.com:7990
     - `TARGET_API_URL`: Only for GitHub Data Residency e.g. https://api.tenant.ghe.com
   - **Create the migration-approval Environment:** The migration job is gated by a required reviewer. Go to `Settings` → `Environments` → `New environment`, name it exactly: `migration-approval`
