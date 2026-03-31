@@ -308,12 +308,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: migration-logs-${{ github.run_id }}
-          path: |
-            ${{ runner.temp }}/bbs2gh-run/migration-*.txt
-            migration.log
-            repo_migration_output.csv
-            migration-*.txt
-            octoshift-logs.tgz
+          path: ${{ runner.temp }}/bbs2gh-run/migration-*.txt
+            # migration.log
+            # repo_migration_output.csv
+            # migration-*.txt
+            # octoshift-logs.tgz
           retention-days: 90
           if-no-files-found: warn
 
