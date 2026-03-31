@@ -75,7 +75,6 @@ The [GitHub Enterprise Importer](https://github.com/github/gh-gei) has the follo
     - `BBS_AUTH_TYPE=Basic`
     - `BBS_USERNAME`
     - `BBS_PASSWORD`
-    - `BBS_PAT`
   - **SSH:**
     - `SSH_USER` - SSH username for the Bitbucket Server host.
     - `SSH_PRIVATE_KEY` — an unencrypted (passphrase-free) private key.
