@@ -303,16 +303,15 @@ jobs:
             --max-concurrent "${{ inputs.max_concurrent }}" \
             --target-api-url "${TARGET_API_URL}"
 
-      - name: Upload migration artifacts
+      - name: Upload migration logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: stage2-migration-${{ github.run_id }}
+          name: migration-logs-${{ github.run_id }}
           path: |
-            migration.log
-            repo_migration_output.csv
-            migration-*.txt
-            octoshift-logs.tgz
+            ${{ runner.temp }}/bbs2gh-run/migration-*.txt
+            ${{ runner.temp }}/bbs2gh-run/*.log
+          retention-days: 90
           if-no-files-found: warn
 
       - name: Upload migration output CSV
